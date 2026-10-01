@@ -99,6 +99,10 @@ void
 NetworkBridge::scheduleFlit(flit *t_flit, Cycles latency)
 {
     Cycles totLatency = latency;
+    if (enSerDes && t_flit->get_type() != CREDIT_) {
+        t_flit->add_serdes_delay(
+            link_consumer->getObject()->cyclesToTicks(latency));
+    }
 
     if (enCdc) {
         // Add the CDC latency
@@ -146,6 +150,7 @@ NetworkBridge::flitisizeAndSend(flit *t_flit)
             // same message together
             int num_flits = 0;
             int flitPossible = 0;
+            const int nextFlitId = sizeSent[vc] / target_width;
             if (t_flit->get_type() == CREDIT_) {
                 lenBuffer[vc]++;
                 assert(extraCredit[vc].front());
@@ -160,7 +165,6 @@ NetworkBridge::flitisizeAndSend(flit *t_flit)
                 // is available.
                 int sizeAvail = (t_flit->msgSize - sizeSent[vc]);
                 flitPossible = ceil((float)sizeAvail/(float)target_width);
-                assert (flitPossible < 2);
                 num_flits = (t_flit->get_id() + 1) - flitsSent[vc];
                 // Stop tracking the packet.
                 flitsSent[vc] = 0;
@@ -182,21 +186,16 @@ NetworkBridge::flitisizeAndSend(flit *t_flit)
             DPRINTF(RubyNetwork, "Deserialize :%dB -----> %dB "
                 " vc:%d\n", cur_width, target_width, vc);
 
-            flit *fl = NULL;
-            if (flitPossible) {
-                fl = t_flit->deserialize(lenBuffer[vc], num_flits,
-                    target_width);
-            }
-
-            // Inform the credit serializer about the number
-            // of flits that were generated.
-            if (t_flit->get_type() != CREDIT_ && fl) {
-                coBridge->neutralize(vc, num_flits);
-            }
-
-            // Schedule only if we are done deserializing
-            if (fl) {
-                DPRINTF(RubyNetwork, "Scheduling a flit\n");
+            for (int i = 0; i < flitPossible; ++i) {
+                // The final input can finish two output flits when widths
+                // have a non-integral ratio. Return each input credit once.
+                const int credits = i == 0 ? num_flits - flitPossible + 1 : 1;
+                flit *fl = t_flit->deserialize(nextFlitId + i, credits,
+                                               target_width);
+                if (t_flit->get_type() != CREDIT_) {
+                    coBridge->neutralize(vc, credits);
+                }
+                DPRINTF(RubyNetwork, "Scheduling flit\n");
                 lenBuffer[vc] = 0;
                 scheduleFlit(fl, serDesLatency);
             }
@@ -209,13 +208,17 @@ NetworkBridge::flitisizeAndSend(flit *t_flit)
                 cur_width, target_width, vc, t_flit->msgSize);
 
             int flitPossible = 0;
+            const int nextFlitId = flitsSent[vc];
             if (t_flit->get_type() == CREDIT_) {
                 // We store the deserialization ratio and then
                 // access it when serializing credits in the
                 // oppposite direction.
-                assert(extraCredit[vc].front());
                 flitPossible = extraCredit[vc].front();
                 extraCredit[vc].pop();
+                if (flitPossible == 0) {
+                    delete t_flit;
+                    return;
+                }
             } else if (t_flit->get_type() == HEAD_ ||
                     t_flit->get_type() == BODY_) {
                 int sizeAvail =
@@ -237,7 +240,12 @@ NetworkBridge::flitisizeAndSend(flit *t_flit)
             // num_flits could be zero for credits
             for (int i = 0; i < flitPossible; i++) {
                 // Ignore neutralized credits
-                flit *fl = t_flit->serialize(i, flitPossible, target_width);
+                // A SerDes width ratio can be non-integral. Use the packet's
+                // actual output count instead of deriving IDs from input IDs.
+                const int serialId = t_flit->get_type() == CREDIT_ ? i :
+                    nextFlitId + i;
+                flit *fl = t_flit->serialize(serialId, flitPossible,
+                                             target_width);
                 scheduleFlit(fl, serDesLatency);
                 DPRINTF(RubyNetwork, "Serialized to flit[%d of %d parts]:"
                 " %s\n", i+1, flitPossible, *fl);

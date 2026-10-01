@@ -45,6 +45,7 @@
 
 #include <algorithm>
 #include <csignal>
+#include <signal.h>
 
 #include "base/cprintf.hh"
 #include "base/logging.hh"

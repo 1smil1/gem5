@@ -41,6 +41,7 @@
 #include "mem/packet.hh"
 #include "mem/port.hh"
 #include "mem/request.hh"
+#include "mem/ruby/network/garnet/OnlinePacketRegistry.hh"
 #include "sim/sim_events.hh"
 #include "sim/stats.hh"
 #include "sim/system.hh"
@@ -78,6 +79,7 @@ GarnetSyntheticTraffic::GarnetSyntheticTraffic(const Params &p)
                 false, Event::CPU_Tick_Pri),
       cachePort("GarnetSyntheticTraffic", this),
       retryPkt(NULL),
+      onlineMode(p.online_mode),
       size(p.memory_size),
       blockSizeBits(p.block_offset),
       numDestinations(p.num_dest),
@@ -95,7 +97,8 @@ GarnetSyntheticTraffic::GarnetSyntheticTraffic(const Params &p)
 {
     // set up counters
     noResponseCycles = 0;
-    schedule(tickEvent, 0);
+    if (!onlineMode)
+        schedule(tickEvent, 0);
 
     initTrafficType();
     if (trafficStringToEnum.count(trafficType) == 0) {
@@ -341,7 +344,50 @@ GarnetSyntheticTraffic::doRetry()
 {
     if (cachePort.sendTimingReq(retryPkt)) {
         retryPkt = NULL;
+        pumpOnlinePackets();
     }
+}
+
+void
+GarnetSyntheticTraffic::sendOnlinePacket(unsigned destination, uint64_t bytes,
+                                         uint64_t traceId)
+{
+    panic_if(!onlineMode, "Online packet API requires online_mode");
+    Addr address = OnlinePacketRegistry::registerPacket(
+        traceId, bytes, destination, numDestinations, blockSizeBits, size);
+    Request::Flags flags;
+    RequestPtr req = std::make_shared<Request>(
+        address, 1, flags, requestorId);
+    req->setContext(id);
+    // Online packets model bulk data transfer, so use the Data/response vnet.
+    PacketPtr pkt = new Packet(req, MemCmd::WriteReq);
+    pkt->dataDynamic(new uint8_t[1]);
+    onlinePending.push_back(pkt);
+    pumpOnlinePackets();
+}
+
+void
+GarnetSyntheticTraffic::pumpOnlinePackets()
+{
+    while (!retryPkt && !onlinePending.empty()) {
+        PacketPtr pkt = onlinePending.front();
+        onlinePending.pop_front();
+        sendPkt(pkt);
+    }
+}
+
+std::string
+GarnetSyntheticTraffic::drainOnlineArrivals()
+{
+    panic_if(!onlineMode, "Online arrival API requires online_mode");
+    return OnlinePacketRegistry::drainArrivals();
+}
+
+uint64_t
+GarnetSyntheticTraffic::onlineInFlight() const
+{
+    panic_if(!onlineMode, "Online in-flight API requires online_mode");
+    return OnlinePacketRegistry::inFlight();
 }
 
 void

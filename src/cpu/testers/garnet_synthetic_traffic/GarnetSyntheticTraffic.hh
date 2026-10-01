@@ -30,6 +30,7 @@
 #define __CPU_GARNET_SYNTHETIC_TRAFFIC_HH__
 
 #include <set>
+#include <deque>
 
 #include "base/statistics.hh"
 #include "mem/port.hh"
@@ -64,6 +65,9 @@ class GarnetSyntheticTraffic : public ClockedObject
 
     // main simulation loop (one cycle)
     void tick();
+    void sendOnlinePacket(unsigned destination, uint64_t bytes, uint64_t id);
+    std::string drainOnlineArrivals();
+    uint64_t onlineInFlight() const;
 
     Port &getPort(const std::string &if_name,
                   PortID idx=InvalidPortID) override;
@@ -109,7 +113,9 @@ class GarnetSyntheticTraffic : public ClockedObject
     };
 
     PacketPtr retryPkt;
-    unsigned size;
+    std::deque<PacketPtr> onlinePending;
+    bool onlineMode;
+    uint64_t size;
     int id;
 
     std::map<std::string, TrafficType> trafficStringToEnum;
@@ -142,6 +148,7 @@ class GarnetSyntheticTraffic : public ClockedObject
     void initTrafficType();
 
     void doRetry();
+    void pumpOnlinePackets();
 
     friend class MemCompleteEvent;
 };

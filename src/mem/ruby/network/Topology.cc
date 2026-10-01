@@ -30,6 +30,14 @@
 #include "mem/ruby/network/Topology.hh"
 
 #include <cassert>
+#include <atomic>
+#include <cerrno>
+#include <climits>
+#include <cstdlib>
+#include <functional>
+#include <future>
+#include <queue>
+#include <thread>
 
 #include "base/trace.hh"
 #include "debug/RubyNetwork.hh"
@@ -394,8 +402,79 @@ Matrix
 Topology::shortest_path(const Matrix &weights, Matrix &latencies,
                         Matrix &inter_switches)
 {
+    // The route table only consumes minimum link weights. Each source row is
+    // independent, so sparse shortest-path searches can run concurrently.
+    (void)latencies;
+    (void)inter_switches;
     Matrix dist = weights;
-    extend_shortest_path(dist, latencies, inter_switches);
+    const int nodes = weights[0].size();
+    using Edge = std::pair<int, int>;
+    std::vector<std::vector<std::vector<Edge>>> edges(
+        m_vnets, std::vector<std::vector<Edge>>(nodes));
+    for (int vnet = 0; vnet < m_vnets; ++vnet) {
+        for (int src = 0; src < nodes; ++src) {
+            for (int dst = 0; dst < nodes; ++dst) {
+                const int weight = weights[vnet][src][dst];
+                if (src != dst && weight > 0 && weight < INFINITE_LATENCY) {
+                    edges[vnet][src].emplace_back(dst, weight);
+                }
+            }
+        }
+    }
+
+    unsigned workers = std::thread::hardware_concurrency();
+    if (workers == 0) {
+        workers = 1;
+    }
+    if (const char *configured = std::getenv("OMELET_ROUTE_THREADS")) {
+        char *end = nullptr;
+        errno = 0;
+        const unsigned long requested = std::strtoul(configured, &end, 10);
+        fatal_if(errno != 0 || end == configured || *end != '\0' ||
+                 requested == 0 || requested > UINT_MAX,
+                 "OMELET_ROUTE_THREADS must be a positive integer");
+        workers = requested;
+    }
+    const int jobs = m_vnets * nodes;
+    workers = std::min(workers, static_cast<unsigned>(jobs));
+    inform("Omelet routing table: %u host threads for %d source rows",
+           workers, jobs);
+    std::atomic<int> next_job{0};
+    const auto work = [&]() {
+        for (int job = next_job.fetch_add(1); job < jobs;
+             job = next_job.fetch_add(1)) {
+            const int vnet = job / nodes;
+            const int src = job % nodes;
+            auto &row = dist[vnet][src];
+            std::fill(row.begin(), row.end(), INFINITE_LATENCY);
+            row[src] = 0;
+            std::priority_queue<Edge, std::vector<Edge>, std::greater<Edge>> pending;
+            pending.emplace(0, src);
+            while (!pending.empty()) {
+                const auto [distance, node] = pending.top();
+                pending.pop();
+                if (distance != row[node]) {
+                    continue;
+                }
+                for (const auto &[dst, weight] : edges[vnet][node]) {
+                    const int candidate = distance + weight;
+                    if (candidate < row[dst]) {
+                        row[dst] = candidate;
+                        pending.emplace(candidate, dst);
+                    }
+                }
+            }
+        }
+    };
+    std::vector<std::future<void>> tasks;
+    tasks.reserve(workers > 0 ? workers - 1 : 0);
+    for (unsigned worker = 1; worker < workers; ++worker) {
+        tasks.emplace_back(std::async(std::launch::async, work));
+    }
+    work();
+    for (auto &task : tasks) {
+        task.get();
+    }
     return dist;
 }
 

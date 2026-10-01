@@ -42,6 +42,7 @@
 #define __BASE_ADDR_RANGE_HH__
 
 #include <algorithm>
+#include <cstdint>
 #include <iterator>
 #include <list>
 #include <vector>
@@ -97,7 +98,7 @@ class AddrRange
     std::vector<Addr> masks;
 
     /** The value to compare sel with. */
-    uint8_t intlvMatch;
+    uint32_t intlvMatch;
 
   protected:
     struct Dummy {};
@@ -120,11 +121,11 @@ class AddrRange
         // either merge if got all ranges or keep this equal to the single
         // interleaved range
         if (count > 1) {
-            fatal_if(count != (1ULL << masks.size()),
+            fatal_if(count > (1ULL << masks.size()),
                     "Got %d ranges spanning %d interleaving bits.",
                     count, masks.size());
 
-            uint8_t match = 0;
+            uint32_t match = 0;
             for (auto it = begin_it; it != end_it; it++) {
                 fatal_if(!mergesWith(*it),
                         "Can only merge ranges with the same start, end "
@@ -181,7 +182,7 @@ class AddrRange
      * @ingroup api_addr_range
      */
     AddrRange(Addr _start, Addr _end, const std::vector<Addr> &_masks,
-              uint8_t _intlv_match)
+              uint32_t _intlv_match)
         : _start(_start), _end(_end), masks(_masks),
           intlvMatch(_intlv_match)
     {
@@ -219,7 +220,7 @@ class AddrRange
      */
     AddrRange(Addr _start, Addr _end, uint8_t _intlv_high_bit,
               uint8_t _xor_high_bit, uint8_t _intlv_bits,
-              uint8_t _intlv_match)
+              uint32_t _intlv_match)
         : _start(_start), _end(_end), masks(_intlv_bits),
           intlvMatch(_intlv_match)
     {

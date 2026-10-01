@@ -166,6 +166,16 @@
  *     kernel such as GNU/kFreeBSD.
  */
 
+#if defined(__CYGWIN__)
+#if defined(__x86_64__)
+#define LIBELF_ARCH EM_X86_64
+#define LIBELF_BYTEORDER ELFDATA2LSB
+#define LIBELF_CLASS ELFCLASS64
+#else
+#error Unsupported MSYS2 architecture for libelf
+#endif
+#endif
+
 #if defined(__linux__) || defined(__GNU__) || defined(__GLIBC__)
 
 #if defined(__linux__)

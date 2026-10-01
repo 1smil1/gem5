@@ -286,6 +286,10 @@ struct name {							\
 
 #ifndef	ELFTC_VCSID
 
+#if defined(__CYGWIN__)
+#define ELFTC_VCSID(ID) /**/
+#endif
+
 #if defined(__DragonFly__)
 #define	ELFTC_VCSID(ID)		__RCSID(ID)
 #endif

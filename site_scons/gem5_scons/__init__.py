@@ -65,6 +65,8 @@ def strip_build_path(path, env):
 
 
 def TempFileSpawn(scons_env):
+    if sys.platform == 'win32':
+        return
     old_pspawn = scons_env["PSPAWN"]
     old_spawn = scons_env["SPAWN"]
 
@@ -253,7 +255,7 @@ def error(*args, **kwargs):
 
 
 def parse_build_path(target):
-    path_dirs = target.split("/")
+    path_dirs = target.replace("\\", "/").split("/")
 
     # Pop off the target file.
     path_dirs.pop()
@@ -266,7 +268,7 @@ def parse_build_path(target):
     if not path_dirs:
         error("No non-leaf 'build' dir found on target path.", target)
 
-    return os.path.join("/", *path_dirs), variant_dir
+    return os.path.normpath("/".join(path_dirs)), variant_dir
 
 
 # The MakeAction wrapper, and a SCons tool to set up the *COMSTR variables.

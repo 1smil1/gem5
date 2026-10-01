@@ -60,6 +60,13 @@ flit::flit(int packet_id, int id, int  vc, int vnet, RouteInfo route, int size,
     m_stage.second = curTime;
     m_width = bWidth;
     msgSize = MsgSize;
+    src_delay = 0;
+    onchip_delay = 0;
+    offchip_delay = 0;
+    serdes_delay = 0;
+    router_enter_time = 0;
+    router_pipeline_delay = 0;
+    router_contention_delay = 0;
 
     if (size == 1) {
         m_type = HEAD_TAIL_;
@@ -78,8 +85,7 @@ flit::serialize(int ser_id, int parts, uint32_t bWidth)
 {
     assert(m_width > bWidth);
 
-    int ratio = (int)divCeil(m_width, bWidth);
-    int new_id = (m_id*ratio) + ser_id;
+    int new_id = ser_id;
     int new_size = (int)divCeil((float)msgSize, (float)bWidth);
     assert(new_id < new_size);
 
@@ -87,14 +93,18 @@ flit::serialize(int ser_id, int parts, uint32_t bWidth)
                     new_size, m_msg_ptr, msgSize, bWidth, m_time);
     fl->set_enqueue_time(m_enqueue_time);
     fl->set_src_delay(src_delay);
+    fl->add_onchip_delay(onchip_delay);
+    fl->add_offchip_delay(offchip_delay);
+    fl->add_serdes_delay(serdes_delay);
+    fl->add_router_pipeline_delay(router_pipeline_delay);
+    fl->add_router_contention_delay(router_contention_delay);
     return fl;
 }
 
 flit *
 flit::deserialize(int des_id, int num_flits, uint32_t bWidth)
 {
-    int ratio = (int)divCeil((float)bWidth, (float)m_width);
-    int new_id = ((int)divCeil((float)(m_id+1), (float)ratio)) - 1;
+    int new_id = des_id;
     int new_size = (int)divCeil((float)msgSize, (float)bWidth);
     assert(new_id < new_size);
 
@@ -102,6 +112,11 @@ flit::deserialize(int des_id, int num_flits, uint32_t bWidth)
                     new_size, m_msg_ptr, msgSize, bWidth, m_time);
     fl->set_enqueue_time(m_enqueue_time);
     fl->set_src_delay(src_delay);
+    fl->add_onchip_delay(onchip_delay);
+    fl->add_offchip_delay(offchip_delay);
+    fl->add_serdes_delay(serdes_delay);
+    fl->add_router_pipeline_delay(router_pipeline_delay);
+    fl->add_router_contention_delay(router_contention_delay);
     return fl;
 }
 

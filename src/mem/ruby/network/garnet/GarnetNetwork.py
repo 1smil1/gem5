@@ -83,3 +83,4 @@ class GarnetRouter(BasicRouter):
     width = Param.UInt32(
         Parent.ni_flit_size, "bit width supported by the router"
     )
+    role        = Param.String("noc", "Hierarchy level {noc|noi|nol}")

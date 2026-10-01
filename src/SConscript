@@ -39,7 +39,7 @@
 
 import collections
 import copy
-import distutils.spawn
+import shutil
 import itertools
 import os
 import os.path
@@ -86,8 +86,8 @@ build_tools = Dir('#build_tools')
 # as gem5. This is in an unorthodox location to avoid building it for every
 # variant.
 gem5py_env = gem5py_env.Clone()
-gem5py = gem5py_env.File('gem5py')
-gem5py_m5 = gem5py_env.File('gem5py_m5')
+gem5py = gem5py_env.File('gem5py' + env['PROGSUFFIX'])
+gem5py_m5 = gem5py_env.File('gem5py_m5' + env['PROGSUFFIX'])
 gem5py_env['GEM5PY'] = gem5py
 gem5py_env['GEM5PY_M5'] = gem5py_m5
 gem5py_env['OBJSUFFIX'] = '.pyo'
@@ -267,7 +267,7 @@ def ProtoBuf(source, tags=None, add_tags=None):
     '''Add a Protocol Buffer to build'''
     Source(source, tags, add_tags, append={'CXXFLAGS': '-Wno-array-bounds'})
 
-env['PROTOC_GRPC'] = distutils.spawn.find_executable('grpc_cpp_plugin')
+env['PROTOC_GRPC'] = shutil.which('grpc_cpp_plugin')
 if env['PROTOC_GRPC']:
     with Configure(env) as conf:
         if (not env['HAVE_PKG_CONFIG'] or
@@ -374,6 +374,8 @@ class SharedLib(TopLevelBase):
         return list([ s.shared(env) for s in sources ])
 
     def declare(self, env):
+        if sys.platform == 'win32':
+            env['no_import_lib'] = 1
         objs = self.srcs_to_objs(env, self.sources(env))
 
         date_obj = env.SharedObject(date_source)
@@ -385,7 +387,7 @@ class Executable(TopLevelBase):
     '''Base class for creating an executable from sources.'''
 
     def path(self, env):
-        return self.dir.File(self.target + '.${ENV_LABEL}')
+        return self.dir.File(self.target + '.${ENV_LABEL}' + env['PROGSUFFIX'])
 
     def declare(self, env, objs=None):
         if objs is None:

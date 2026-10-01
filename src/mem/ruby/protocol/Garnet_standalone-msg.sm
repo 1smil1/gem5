@@ -40,6 +40,7 @@ structure(RequestMsg, desc="...", interface="Message") {
   NetDest Destination,         desc="Multicast destination mask";
   DataBlock DataBlk,           desc="data for the cache line";
   MessageSizeType MessageSize, desc="size category of the message";
+  Addr TraceAddr, desc="Address identifying an online packet";
 
   bool functionalRead(Packet *pkt) {
     error("Garnet_standalone does not support functional accesses!");

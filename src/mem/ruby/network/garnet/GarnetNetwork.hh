@@ -133,6 +133,21 @@ class GarnetNetwork : public Network
         m_packet_queueing_latency[vnet] += latency;
     }
 
+    void increment_packet_onchip_latency(Tick latency, int vnet)
+    {
+        m_packet_onchip_latency[vnet] += latency;
+    }
+
+    void increment_packet_offchip_latency(Tick latency, int vnet)
+    {
+        m_packet_offchip_latency[vnet] += latency;
+    }
+
+    void increment_packet_serdes_latency(Tick latency, int vnet)
+    {
+        m_packet_serdes_latency[vnet] += latency;
+    }
+
     void increment_injected_flits(int vnet) { m_flits_injected[vnet]++; }
     void increment_received_flits(int vnet) { m_flits_received[vnet]++; }
 
@@ -146,6 +161,31 @@ class GarnetNetwork : public Network
     increment_flit_queueing_latency(Tick latency, int vnet)
     {
         m_flit_queueing_latency[vnet] += latency;
+    }
+
+    void increment_flit_onchip_latency(Tick latency, int vnet)
+    {
+        m_flit_onchip_latency[vnet] += latency;
+    }
+
+    void increment_flit_offchip_latency(Tick latency, int vnet)
+    {
+        m_flit_offchip_latency[vnet] += latency;
+    }
+
+    void increment_flit_serdes_latency(Tick latency, int vnet)
+    {
+        m_flit_serdes_latency[vnet] += latency;
+    }
+
+    void increment_flit_router_pipeline_latency(Tick latency, int vnet)
+    {
+        m_flit_router_pipeline_latency[vnet] += latency;
+    }
+
+    void increment_flit_router_contention_latency(Tick latency, int vnet)
+    {
+        m_flit_router_contention_latency[vnet] += latency;
     }
 
     void
@@ -167,28 +207,46 @@ class GarnetNetwork : public Network
     uint32_t m_buffers_per_data_vc;
     int m_routing_algorithm;
     bool m_enable_fault_model;
+    std::string m_role; // Hierarchy level: noc, noi, nol, nox...
+
 
     // Statistical variables
     statistics::Vector m_packets_received;
     statistics::Vector m_packets_injected;
     statistics::Vector m_packet_network_latency;
     statistics::Vector m_packet_queueing_latency;
+    statistics::Vector m_packet_onchip_latency;
+    statistics::Vector m_packet_offchip_latency;
+    statistics::Vector m_packet_serdes_latency;
 
     statistics::Formula m_avg_packet_vnet_latency;
     statistics::Formula m_avg_packet_vqueue_latency;
     statistics::Formula m_avg_packet_network_latency;
     statistics::Formula m_avg_packet_queueing_latency;
+    statistics::Formula m_avg_packet_onchip_latency;
+    statistics::Formula m_avg_packet_offchip_latency;
+    statistics::Formula m_avg_packet_serdes_latency;
     statistics::Formula m_avg_packet_latency;
 
     statistics::Vector m_flits_received;
     statistics::Vector m_flits_injected;
     statistics::Vector m_flit_network_latency;
     statistics::Vector m_flit_queueing_latency;
+    statistics::Vector m_flit_onchip_latency;
+    statistics::Vector m_flit_offchip_latency;
+    statistics::Vector m_flit_serdes_latency;
+    statistics::Vector m_flit_router_pipeline_latency;
+    statistics::Vector m_flit_router_contention_latency;
 
     statistics::Formula m_avg_flit_vnet_latency;
     statistics::Formula m_avg_flit_vqueue_latency;
     statistics::Formula m_avg_flit_network_latency;
     statistics::Formula m_avg_flit_queueing_latency;
+    statistics::Formula m_avg_flit_onchip_latency;
+    statistics::Formula m_avg_flit_offchip_latency;
+    statistics::Formula m_avg_flit_serdes_latency;
+    statistics::Formula m_avg_flit_router_pipeline_latency;
+    statistics::Formula m_avg_flit_router_contention_latency;
     statistics::Formula m_avg_flit_latency;
 
     statistics::Scalar m_total_ext_in_link_utilization;

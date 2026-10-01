@@ -109,6 +109,7 @@ InputUnit::wakeup()
 
         // Buffer the flit
         virtualChannels[vc].insertFlit(t_flit);
+        t_flit->set_router_enter_time(curTick());
 
         int vnet = vc/m_vc_per_vnet;
         // number of writes same as reads

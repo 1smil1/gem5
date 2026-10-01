@@ -49,6 +49,9 @@ NetworkLink::NetworkLink(const Params &p)
     : ClockedObject(p), Consumer(this), m_id(p.link_id),
       m_type(NUM_LINK_TYPES_),
       m_latency(p.link_latency), m_link_utilized(0),
+      m_onchip_component_latency(p.onchip_component_latency),
+      m_offchip_component_latency(p.offchip_component_latency),
+      m_serdes_component_latency(p.serdes_component_latency),
       m_virt_nets(p.virt_nets), linkBuffer(),
       link_consumer(nullptr), link_srcQueue(nullptr)
 {
@@ -58,6 +61,11 @@ NetworkLink::NetworkLink(const Params &p)
     for (int i = 0; i < num_vnets; i++) {
         mVnets[i] = p.supported_vnets[i];
     }
+
+    linkUtilStat
+        .name(name() + ".link_utilization")
+        .desc("Number of flits sent through this link")
+        .flags(Stats::total);
 }
 
 void
@@ -97,11 +105,16 @@ NetworkLink::wakeup()
                 t_flit->get_vnet()) != mVnets.end()) ||
                 (mVnets.size() == 0));
         }
+        t_flit->add_onchip_delay(cyclesToTicks(m_onchip_component_latency));
+        t_flit->add_offchip_delay(cyclesToTicks(m_offchip_component_latency));
+        t_flit->add_serdes_delay(cyclesToTicks(m_serdes_component_latency));
         t_flit->set_time(clockEdge(m_latency));
         linkBuffer.insert(t_flit);
         link_consumer->scheduleEventAbsolute(clockEdge(m_latency));
         m_link_utilized++;
         m_vc_load[t_flit->get_vc()]++;
+
+        linkUtilStat = m_link_utilized;
     }
 
     if (!link_srcQueue->isEmpty()) {
@@ -117,6 +130,7 @@ NetworkLink::resetStats()
     }
 
     m_link_utilized = 0;
+    linkUtilStat = 0;
 }
 
 bool

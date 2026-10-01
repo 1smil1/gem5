@@ -413,11 +413,32 @@ GarnetNetwork::regStats()
         .flags(statistics::oneline)
         ;
 
+    m_packet_onchip_latency
+        .init(m_virtual_networks)
+        .name(name() + ".packet_onchip_latency")
+        .flags(statistics::oneline)
+        ;
+
+    m_packet_offchip_latency
+        .init(m_virtual_networks)
+        .name(name() + ".packet_offchip_latency")
+        .flags(statistics::oneline)
+        ;
+
+    m_packet_serdes_latency
+        .init(m_virtual_networks)
+        .name(name() + ".packet_serdes_latency")
+        .flags(statistics::oneline)
+        ;
+
     for (int i = 0; i < m_virtual_networks; i++) {
         m_packets_received.subname(i, csprintf("vnet-%i", i));
         m_packets_injected.subname(i, csprintf("vnet-%i", i));
         m_packet_network_latency.subname(i, csprintf("vnet-%i", i));
         m_packet_queueing_latency.subname(i, csprintf("vnet-%i", i));
+        m_packet_onchip_latency.subname(i, csprintf("vnet-%i", i));
+        m_packet_offchip_latency.subname(i, csprintf("vnet-%i", i));
+        m_packet_serdes_latency.subname(i, csprintf("vnet-%i", i));
     }
 
     m_avg_packet_vnet_latency
@@ -441,6 +462,21 @@ GarnetNetwork::regStats()
         .name(name() + ".average_packet_queueing_latency");
     m_avg_packet_queueing_latency
         = sum(m_packet_queueing_latency) / sum(m_packets_received);
+
+    m_avg_packet_onchip_latency
+        .name(name() + ".average_packet_onchip_latency");
+    m_avg_packet_onchip_latency =
+        sum(m_packet_onchip_latency) / sum(m_packets_received);
+
+    m_avg_packet_offchip_latency
+        .name(name() + ".average_packet_offchip_latency");
+    m_avg_packet_offchip_latency =
+        sum(m_packet_offchip_latency) / sum(m_packets_received);
+
+    m_avg_packet_serdes_latency
+        .name(name() + ".average_packet_serdes_latency");
+    m_avg_packet_serdes_latency =
+        sum(m_packet_serdes_latency) / sum(m_packets_received);
 
     m_avg_packet_latency
         .name(name() + ".average_packet_latency");
@@ -474,11 +510,46 @@ GarnetNetwork::regStats()
         .flags(statistics::oneline)
         ;
 
+    m_flit_onchip_latency
+        .init(m_virtual_networks)
+        .name(name() + ".flit_onchip_latency")
+        .flags(statistics::oneline)
+        ;
+
+    m_flit_offchip_latency
+        .init(m_virtual_networks)
+        .name(name() + ".flit_offchip_latency")
+        .flags(statistics::oneline)
+        ;
+
+    m_flit_serdes_latency
+        .init(m_virtual_networks)
+        .name(name() + ".flit_serdes_latency")
+        .flags(statistics::oneline)
+        ;
+
+    m_flit_router_pipeline_latency
+        .init(m_virtual_networks)
+        .name(name() + ".flit_router_pipeline_latency")
+        .flags(statistics::oneline)
+        ;
+
+    m_flit_router_contention_latency
+        .init(m_virtual_networks)
+        .name(name() + ".flit_router_contention_latency")
+        .flags(statistics::oneline)
+        ;
+
     for (int i = 0; i < m_virtual_networks; i++) {
         m_flits_received.subname(i, csprintf("vnet-%i", i));
         m_flits_injected.subname(i, csprintf("vnet-%i", i));
         m_flit_network_latency.subname(i, csprintf("vnet-%i", i));
         m_flit_queueing_latency.subname(i, csprintf("vnet-%i", i));
+        m_flit_onchip_latency.subname(i, csprintf("vnet-%i", i));
+        m_flit_offchip_latency.subname(i, csprintf("vnet-%i", i));
+        m_flit_serdes_latency.subname(i, csprintf("vnet-%i", i));
+        m_flit_router_pipeline_latency.subname(i, csprintf("vnet-%i", i));
+        m_flit_router_contention_latency.subname(i, csprintf("vnet-%i", i));
     }
 
     m_avg_flit_vnet_latency
@@ -501,6 +572,31 @@ GarnetNetwork::regStats()
         .name(name() + ".average_flit_queueing_latency");
     m_avg_flit_queueing_latency =
         sum(m_flit_queueing_latency) / sum(m_flits_received);
+
+    m_avg_flit_onchip_latency
+        .name(name() + ".average_flit_onchip_latency");
+    m_avg_flit_onchip_latency =
+        sum(m_flit_onchip_latency) / sum(m_flits_received);
+
+    m_avg_flit_offchip_latency
+        .name(name() + ".average_flit_offchip_latency");
+    m_avg_flit_offchip_latency =
+        sum(m_flit_offchip_latency) / sum(m_flits_received);
+
+    m_avg_flit_serdes_latency
+        .name(name() + ".average_flit_serdes_latency");
+    m_avg_flit_serdes_latency =
+        sum(m_flit_serdes_latency) / sum(m_flits_received);
+
+    m_avg_flit_router_pipeline_latency
+        .name(name() + ".average_flit_router_pipeline_latency");
+    m_avg_flit_router_pipeline_latency =
+        sum(m_flit_router_pipeline_latency) / sum(m_flits_received);
+
+    m_avg_flit_router_contention_latency
+        .name(name() + ".average_flit_router_contention_latency");
+    m_avg_flit_router_contention_latency =
+        sum(m_flit_router_contention_latency) / sum(m_flits_received);
 
     m_avg_flit_latency
         .name(name() + ".average_flit_latency");

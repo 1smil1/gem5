@@ -40,7 +40,6 @@
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/types.h>
-#include <sys/user.h>
 #include <unistd.h>
 #include <zlib.h>
 

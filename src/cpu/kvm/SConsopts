@@ -31,14 +31,13 @@ import gem5_scons
 
 # ISA code can set this to indicate what ISA KVM can target.
 main['CONF'].setdefault('KVM_ISA', '')
+main['CONF']['HAVE_KVM'] = False
 
 with gem5_scons.Configure(main) as conf:
     # Check if we should enable KVM-based hardware virtualization. The
     # API we rely on exists since version 2.6.36 of the kernel, but
     # somehow the KVM_API_VERSION does not reflect the change. We test
     # for one of the types as a fall back.
-
-    main['CONF']['HAVE_KVM'] = False
 
     if not conf.CheckHeader('linux/kvm.h', '<>'):
         warning("Info: Compatible header file <linux/kvm.h> not found, "

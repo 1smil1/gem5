@@ -109,8 +109,8 @@ OutputFile<StreamType>::relocate(const OutputDirectory &dir)
     }
 }
 
-OutputStream OutputDirectory::stdout("stdout", &std::cout);
-OutputStream OutputDirectory::stderr("stderr", &std::cerr);
+OutputStream OutputDirectory::stdoutStream("stdout", &std::cout);
+OutputStream OutputDirectory::stderrStream("stderr", &std::cerr);
 
 /**
  * @file This file manages creating / deleting output files for the simulator.
@@ -135,10 +135,10 @@ OutputStream *
 OutputDirectory::checkForStdio(const std::string &name)
 {
     if (name == "cerr" || name == "stderr")
-        return &stderr;
+        return &stderrStream;
 
     if (name == "cout" || name == "stdout")
-        return &stdout;
+        return &stdoutStream;
 
     return NULL;
 }
@@ -146,7 +146,7 @@ OutputDirectory::checkForStdio(const std::string &name)
 void
 OutputDirectory::close(OutputStream *file)
 {
-    if (file == &stdout || file == &stderr) {
+    if (file == &stdoutStream || file == &stderrStream) {
         file->stream()->flush();
         return;
     }

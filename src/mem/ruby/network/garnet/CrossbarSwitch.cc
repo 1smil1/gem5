@@ -78,6 +78,13 @@ CrossbarSwitch::wakeup()
         if (t_flit->is_stage(ST_, curTick())) {
             int outport = t_flit->get_outport();
 
+            Tick router_delay_this_hop = m_router->clockEdge(Cycles(1)) - t_flit->get_router_enter_time();
+            Tick pipe_stages_delay = m_router->cyclesToTicks(m_router->get_pipe_stages());
+            t_flit->add_router_pipeline_delay(pipe_stages_delay);
+            if (router_delay_this_hop > pipe_stages_delay) {
+                t_flit->add_router_contention_delay(router_delay_this_hop - pipe_stages_delay);
+            }
+
             // flit performs LT_ in the next cycle
             t_flit->advance_stage(LT_, m_router->clockEdge(Cycles(1)));
             t_flit->set_time(m_router->clockEdge(Cycles(1)));

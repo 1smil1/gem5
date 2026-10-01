@@ -80,6 +80,14 @@ class Message
     virtual MessageSizeType& getMessageSize()
     { panic("MessageSizeType() called on wrong message!"); }
 
+    // The standalone online protocol overrides this through its TraceAddr
+    // message field. Other protocols retain their existing size semantics.
+    virtual const Addr& getTraceAddr() const
+    {
+        static const Addr none = 0;
+        return none;
+    }
+
     /**
      * The two functions below are used for reading / writing the message
      * functionally. The methods return true if the address in the packet

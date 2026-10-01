@@ -41,6 +41,7 @@
 #include "mem/ruby/network/garnet/flitBuffer.hh"
 #include "params/NetworkLink.hh"
 #include "sim/clocked_object.hh"
+#include "sim/stats.hh"  // Add if not already
 
 namespace gem5
 {
@@ -88,10 +89,14 @@ class NetworkLink : public ClockedObject, public Consumer
     std::vector<int> mVnets;
     uint32_t bitWidth;
 
+    gem5::Stats::Scalar linkUtilStat;
   private:
     const int m_id;
     link_type m_type;
     const Cycles m_latency;
+    const Cycles m_onchip_component_latency;
+    const Cycles m_offchip_component_latency;
+    const Cycles m_serdes_component_latency;
 
     ClockedObject *src_object;
 

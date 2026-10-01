@@ -1,28 +1,3 @@
-# Copyright (c) 2016 Georgia Institute of Technology
-# All rights reserved.
-#
-# Redistribution and use in source and binary forms, with or without
-# modification, are permitted provided that the following conditions are
-# met: redistributions of source code must retain the above copyright
-# notice, this list of conditions and the following disclaimer;
-# redistributions in binary form must reproduce the above copyright
-# notice, this list of conditions and the following disclaimer in the
-# documentation and/or other materials provided with the distribution;
-# neither the name of the copyright holders nor the names of its
-# contributors may be used to endorse or promote products derived from
-# this software without specific prior written permission.
-#
-# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-# "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-# LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
-# A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
-# OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
-# SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-# LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-# DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-# THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-# (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 import math
 import m5
@@ -32,7 +7,6 @@ from m5.util import addToPath, fatal, warn
 
 
 def define_options(parser):
-    # By default, ruby uses the simple timing cpu
     parser.set_defaults(cpu_type="TimingSimpleCPU")
 
     parser.add_argument(
@@ -87,6 +61,8 @@ def define_options(parser):
         help="""number of virtual channels per virtual network
             inside garnet network.""",
     )
+    parser.add_argument("--buffers-per-ctrl-vc", type=int, default=1)
+    parser.add_argument("--buffers-per-data-vc", type=int, default=4)
     parser.add_argument(
         "--routing-algorithm",
         action="store",
@@ -118,12 +94,118 @@ def define_options(parser):
         help="""SimpleNetwork links uses a separate physical
             channel for each virtual network""",
     )
-
+    parser.add_argument(
+        "--noc_config",
+        action="store",
+        type=str,
+        default=None,
+        help="""Omelet hierarchical config - NoC""",
+    )
+    parser.add_argument(
+        "--sys_config",
+        action="store",
+        type=str,
+        default=None,
+        help="""Omelet hierarchical config - NoI""",
+    )
+    parser.add_argument(
+        "--net_config",
+        action="store",
+        type=str,
+        default=None,
+        help="""Omelet network parameters (router/link widths, VCs, etc.)""",
+    )
+    parser.add_argument(
+        "--nonuniform_grid_config",
+        action="store",
+        type=str,
+        default=None,
+        help="Shared nonuniform chiplet grid and boundary-link description",
+    )
+    parser.add_argument(
+        "--noi_config",
+        action="store",
+        type=str,
+        default=None,
+        help="""Omelet hierarchical config - NoI""",
+    )
+    parser.add_argument(
+        "--nol_config",
+        action="store",
+        type=str,
+        default=None,
+        help="""Omelet hierarchical config - NoL""",
+    )
+    parser.add_argument(
+        "--material",
+        action="store",
+        type=str,
+        default="org",
+        help="""Interposer material (org/sil/glass). Selects the tech-aware
+            latency/EPB tables and the NoI router width; the only link-model
+            values read on the live path are this material string and the
+            chiplet count (derived from the system config).""",
+    )
+    parser.add_argument(
+        "--plc_config",
+        action="store",
+        type=str,
+        default=None,
+        help="""Place model - latency, bandwidth, and power""",
+    )
+    parser.add_argument(
+        "--bonding",
+        action="store",
+        type=str,
+        default="ubump30",
+        help="""Place model - latency, bandwidth, and power""",
+    )
+    parser.add_argument(
+        "--lat_table",
+        action="store",
+        type=str,
+        default=None,
+        help="""Latency table for different lengths""",
+    )
+    parser.add_argument(
+        "--epb_table",
+        action="store",
+        type=str,
+        default=None,
+        help="""EPB table for different lengths""",
+    )
+    parser.add_argument(
+        "--perturbation",
+        action="store",
+        type=float,
+        default=1.0,
+        help="""Perturbation factor for latency values""",
+    )
+    parser.add_argument(
+        "--link_width_mode",
+        action="store",
+        type=str,
+        default=None,
+        choices=["manual", "computed"],
+        help="""Link width/count derivation mode.
+            'manual' (DEFAULT): width = lat_table func(base_latency_ps), link
+              count = sys_cfg['num_links'] constant -- byte-identical to the
+              published configs (keeps Fig.7 bit-exact).
+            'computed': cap link width/count by the §IV-C beach-front (lateral)
+              / vertical-overlap-area geometry from the place model. NEW
+              capability; NOT bit-exact to the manual path.
+            May also be set via sys_cfg['link_width_mode']; the CLI flag wins.""",
+    )
+    parser.add_argument(
+        "--c2c_bonding",
+        action="store",
+        type=str,
+        default="ubump10",
+        help="""3D: chip-to-chip (NoL/via) bonding for vertical links. Only read by nox3d_* topologies.""",
+    )
 
 def create_network(options, ruby):
 
-    # Allow legacy users to use garnet through garnet2.0 option
-    # until next gem5 release.
     if options.network == "garnet2.0":
         warn(
             "Usage of option 'garnet2.0' will be depracated. "
@@ -132,7 +214,6 @@ def create_network(options, ruby):
         )
         options.network = "garnet"
 
-    # Set the network classes based on the command line options
     if options.network == "garnet":
         NetworkClass = GarnetNetwork
         IntLinkClass = GarnetIntLink
@@ -147,8 +228,6 @@ def create_network(options, ruby):
         RouterClass = Switch
         InterfaceClass = None
 
-    # Instantiate the network object
-    # so that the controllers can connect to it.
     network = NetworkClass(
         ruby_system=ruby,
         topology=options.topology,
@@ -166,11 +245,12 @@ def init_network(options, network, InterfaceClass):
     if options.network == "garnet":
         network.num_rows = options.mesh_rows
         network.vcs_per_vnet = options.vcs_per_vnet
+        network.buffers_per_ctrl_vc = options.buffers_per_ctrl_vc
+        network.buffers_per_data_vc = options.buffers_per_data_vc
         network.ni_flit_size = options.link_width_bits / 8
         network.routing_algorithm = options.routing_algorithm
         network.garnet_deadlock_threshold = options.garnet_deadlock_threshold
 
-        # Create Bridges and connect them to the corresponding links
         for intLink in network.int_links:
             intLink.src_net_bridge = NetworkBridge(
                 link=intLink.network_link,

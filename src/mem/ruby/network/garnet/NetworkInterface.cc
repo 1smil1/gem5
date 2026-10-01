@@ -34,11 +34,13 @@
 
 #include <cassert>
 #include <cmath>
+#include <limits>
 
 #include "base/cast.hh"
 #include "debug/RubyNetwork.hh"
 #include "mem/ruby/network/MessageBuffer.hh"
 #include "mem/ruby/network/garnet/Credit.hh"
+#include "mem/ruby/network/garnet/OnlinePacketRegistry.hh"
 #include "mem/ruby/network/garnet/flitBuffer.hh"
 #include "mem/ruby/slicc_interface/Message.hh"
 
@@ -166,11 +168,23 @@ NetworkInterface::incrementStats(flit *t_flit)
 
     m_net_ptr->increment_flit_network_latency(network_delay, vnet);
     m_net_ptr->increment_flit_queueing_latency(queueing_delay, vnet);
+    m_net_ptr->increment_flit_onchip_latency(t_flit->get_onchip_delay(), vnet);
+    m_net_ptr->increment_flit_offchip_latency(
+        t_flit->get_offchip_delay(), vnet);
+    m_net_ptr->increment_flit_serdes_latency(t_flit->get_serdes_delay(), vnet);
+    m_net_ptr->increment_flit_router_pipeline_latency(t_flit->get_router_pipeline_delay(), vnet);
+    m_net_ptr->increment_flit_router_contention_latency(t_flit->get_router_contention_delay(), vnet);
 
     if (t_flit->get_type() == TAIL_ || t_flit->get_type() == HEAD_TAIL_) {
         m_net_ptr->increment_received_packets(vnet);
         m_net_ptr->increment_packet_network_latency(network_delay, vnet);
         m_net_ptr->increment_packet_queueing_latency(queueing_delay, vnet);
+        m_net_ptr->increment_packet_onchip_latency(
+            t_flit->get_onchip_delay(), vnet);
+        m_net_ptr->increment_packet_offchip_latency(
+            t_flit->get_offchip_delay(), vnet);
+        m_net_ptr->increment_packet_serdes_latency(
+            t_flit->get_serdes_delay(), vnet);
     }
 
     // Hops
@@ -245,6 +259,8 @@ NetworkInterface::wakeup()
                     // Space is available. Enqueue to protocol buffer.
                     outNode_ptr[vnet]->enqueue(t_flit->get_msg_ptr(), curTime,
                                                cyclesToTicks(Cycles(1)));
+                    OnlinePacketRegistry::arrived(
+                        t_flit->get_msg_ptr()->getTraceAddr());
 
                     // Simply send a credit back since we are not buffering
                     // this flit in the NI
@@ -333,6 +349,8 @@ NetworkInterface::checkStallQueue()
                     curTime)) {
                     outNode_ptr[vnet]->enqueue(stallFlit->get_msg_ptr(),
                         curTime, cyclesToTicks(Cycles(1)));
+                    OnlinePacketRegistry::arrived(
+                        stallFlit->get_msg_ptr()->getTraceAddr());
 
                     // Send back a credit with free signal now that the
                     // VC is no longer stalled.
@@ -378,8 +396,22 @@ NetworkInterface::flitisizeMessage(MsgPtr msg_ptr, int vnet)
     // This is expressed in terms of bytes/cycle or the flit size
     OutputPort *oPort = getOutportForVnet(vnet);
     assert(oPort);
-    int num_flits = (int)divCeil((float) m_net_ptr->MessageSizeType_to_int(
-        net_msg_ptr->getMessageSize()), (float)oPort->bitWidth());
+    uint64_t onlineBytes = 0;
+    const bool online = OnlinePacketRegistry::sizeFor(
+        net_msg_ptr->getTraceAddr(), onlineBytes);
+    const uint64_t messageBytes = online ? onlineBytes :
+        m_net_ptr->MessageSizeType_to_int(net_msg_ptr->getMessageSize());
+    panic_if(online && oPort->bitWidth() % 8 != 0,
+             "Online link width must be a whole number of bytes");
+    const uint64_t flitBytes = online ? oPort->bitWidth() / 8 :
+        oPort->bitWidth();
+    const uint64_t flits = divCeil(messageBytes, flitBytes);
+    panic_if(flits == 0 || flits > std::numeric_limits<int>::max(),
+             "Invalid online message size: %llu bytes", messageBytes);
+    panic_if(online && messageBytes > std::numeric_limits<int>::max() / 8,
+             "Online message too large for Garnet flit size: %llu bytes",
+             messageBytes);
+    int num_flits = int(flits);
 
     DPRINTF(RubyNetwork, "Message Size:%d vnet:%d bitWidth:%d\n",
         m_net_ptr->MessageSizeType_to_int(net_msg_ptr->getMessageSize()),
@@ -441,8 +473,9 @@ NetworkInterface::flitisizeMessage(MsgPtr msg_ptr, int vnet)
             m_net_ptr->increment_injected_flits(vnet);
             flit *fl = new flit(packet_id,
                 i, vc, vnet, route, num_flits, new_msg_ptr,
-                m_net_ptr->MessageSizeType_to_int(
-                net_msg_ptr->getMessageSize()),
+                    online ? static_cast<int>(messageBytes * 8) :
+                        m_net_ptr->MessageSizeType_to_int(
+                            net_msg_ptr->getMessageSize()),
                 oPort->bitWidth(), curTick());
 
             fl->set_src_delay(curTick() - msg_ptr->getTime());

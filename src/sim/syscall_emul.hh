@@ -1750,6 +1750,7 @@ cloneBackwardsFunc(SyscallDesc *desc, ThreadContext *tc, RegVal flags,
 }
 
 /// Target fstatfs() handler.
+#ifdef __linux__
 template <class OS>
 SyscallReturn
 fstatfsFunc(SyscallDesc *desc, ThreadContext *tc,
@@ -1772,6 +1773,7 @@ fstatfsFunc(SyscallDesc *desc, ThreadContext *tc,
 
     return 0;
 }
+#endif
 
 /// Target readv() handler.
 template <class OS>

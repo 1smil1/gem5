@@ -25,20 +25,27 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 from m5.objects.ClockedObject import ClockedObject
+from m5.SimObject import PyBindMethod
 from m5.params import *
 from m5.proxy import *
 
 
 class GarnetSyntheticTraffic(ClockedObject):
+    cxx_exports = [
+        PyBindMethod("sendOnlinePacket"),
+        PyBindMethod("drainOnlineArrivals"),
+        PyBindMethod("onlineInFlight"),
+    ]
     type = "GarnetSyntheticTraffic"
     cxx_header = (
         "cpu/testers/garnet_synthetic_traffic/GarnetSyntheticTraffic.hh"
     )
     cxx_class = "gem5::GarnetSyntheticTraffic"
+    online_mode = Param.Bool(False, "Drive packets through the online API")
 
     block_offset = Param.Int(6, "block offset in bits")
     num_dest = Param.Int(1, "Number of Destinations")
-    memory_size = Param.Int(65536, "memory size")
+    memory_size = Param.UInt64(65536, "memory size")
     sim_cycles = Param.Int(1000, "Number of simulation cycles")
     num_packets_max = Param.Int(
         -1,

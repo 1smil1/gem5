@@ -179,8 +179,21 @@ main = Environment(tools=[
         ConfigFile, AddLocalRPATH, SwitchingHeaders, TagImpliesTool, Blob
     ])
 
-main.Tool(SCons.Tool.FindTool(['gcc', 'clang'], main))
-main.Tool(SCons.Tool.FindTool(['g++', 'clang++'], main))
+if sys.platform == 'win32':
+    main.Tool('mingw')
+    main.Append(CCFLAGS=['-include', 'string.h'])
+    main.Append(CPPDEFINES=['_GNU_SOURCE'])
+    main['ENV']['PATH'] = os.environ['PATH']
+    if 'CC' in os.environ:
+        main['CC'] = os.environ['CC']
+    if 'CXX' in os.environ:
+        main['CXX'] = os.environ['CXX']
+    main['CXXVERSION'] = readCommand([main['CXX'], '-dumpfullversion']).strip()
+elif sys.platform == 'cygwin':
+    main.Append(CPPDEFINES=['_GNU_SOURCE'])
+else:
+    main.Tool(SCons.Tool.FindTool(['gcc', 'clang'], main))
+    main.Tool(SCons.Tool.FindTool(['g++', 'clang++'], main))
 
 Export('main')
 
@@ -265,6 +278,10 @@ main.Append(CPPPATH=[Dir('ext')])
 # Add shared top-level headers
 main.Prepend(CPPPATH=Dir('include'))
 
+if 'CONDA_PREFIX' in environ:
+    main.Prepend(CPPPATH=[join(environ['CONDA_PREFIX'], 'include')])
+    main.Prepend(LIBPATH=[join(environ['CONDA_PREFIX'], 'lib')])
+
 
 ########################################################################
 #
@@ -285,7 +302,8 @@ main['TCMALLOC_CCFLAGS'] = []
 
 CXX_version = readCommand([main['CXX'], '--version'], exception=False)
 
-main['GCC'] = CXX_version and CXX_version.find('g++') >= 0
+main['GCC'] = CXX_version and (CXX_version.find('g++') >= 0 or
+                               CXX_version.find('gcc') >= 0)
 main['CLANG'] = CXX_version and CXX_version.find('clang') >= 0
 if main['GCC'] + main['CLANG'] > 1:
     error('Two compilers enabled at once?')
@@ -300,6 +318,14 @@ if main['GCC'] + main['CLANG'] > 1:
 main['USE_PYTHON'] = not GetOption('without_python')
 
 def config_embedded_python(env):
+    if sys.platform == 'win32':
+        import sysconfig
+        import pybind11
+        env.Prepend(CPPPATH=[sysconfig.get_path('include')])
+        env.Append(LIBPATH=[join(sys.base_prefix, 'libs')])
+        env.Append(LIBS=[f'python{sys.version_info.major}{sys.version_info.minor}'])
+        env.Prepend(CPPPATH=[pybind11.get_include()])
+        return
     # Find Python include and library directories for embedding the
     # interpreter. We rely on python-config to resolve the appropriate
     # includes and linker flags. If you want to link in an alternate version
@@ -331,7 +357,11 @@ def config_embedded_python(env):
 
     env.ParseConfig(cmd, flag_filter)
 
-    env.Prepend(CPPPATH=Dir('ext/pybind11/include/'))
+    if sys.version_info >= (3, 11):
+        import pybind11
+        env.Prepend(CPPPATH=[pybind11.get_include()])
+    else:
+        env.Prepend(CPPPATH=Dir('ext/pybind11/include/'))
 
     with gem5_scons.Configure(env) as conf:
         # verify that this stuff works

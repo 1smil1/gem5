@@ -155,8 +155,8 @@ class OutputDirectory
     /** System-specific path separator character */
     static const char PATH_SEPARATOR = '/';
 
-    static OutputStream stdout;
-    static OutputStream stderr;
+    static OutputStream stdoutStream;
+    static OutputStream stderrStream;
 
   protected:
     /**

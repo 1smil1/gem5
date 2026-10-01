@@ -29,7 +29,9 @@
 #include "sim/syscall_emul.hh"
 
 #include <fcntl.h>
+#ifdef __linux__
 #include <sys/syscall.h>
+#endif
 #include <unistd.h>
 
 #include <csignal>
@@ -1452,11 +1454,13 @@ getpeernameFunc(SyscallDesc *desc, ThreadContext *tc,
     bufAddrlen.copyIn(proxy);
     BufferArg bufSock(sockAddrPtr, *(unsigned *)bufAddrlen.bufferPtr());
 
+    socklen_t hostAddrlen = *(unsigned *)bufAddrlen.bufferPtr();
     int retval = getpeername(sim_fd,
                              (struct sockaddr *)bufSock.bufferPtr(),
-                             (unsigned *)bufAddrlen.bufferPtr());
+                             &hostAddrlen);
 
     if (retval != -1) {
+        *(unsigned *)bufAddrlen.bufferPtr() = hostAddrlen;
         bufSock.copyOut(proxy);
         bufAddrlen.copyOut(proxy);
     }

@@ -112,6 +112,7 @@ class Router : public BasicRouter, public Consumer
     }
 
     int getBitWidth() { return m_bit_width; }
+    const std::string& role() const { return m_role; }
 
     PortDirection getOutportDirection(int outport);
     PortDirection getInportDirection(int inport);
@@ -147,6 +148,7 @@ class Router : public BasicRouter, public Consumer
     uint32_t m_virtual_networks, m_vc_per_vnet, m_num_vcs;
     uint32_t m_bit_width;
     GarnetNetwork *m_network_ptr;
+    std::string m_role;
 
     RoutingUnit routingUnit;
     SwitchAllocator switchAllocator;
