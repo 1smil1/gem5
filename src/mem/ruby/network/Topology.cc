@@ -33,6 +33,9 @@
 #include <atomic>
 #include <cerrno>
 #include <climits>
+#include <chrono>
+#include <iostream>
+#include <mutex>
 #include <cstdlib>
 #include <functional>
 #include <future>
@@ -51,6 +54,22 @@ namespace gem5
 
 namespace ruby
 {
+
+namespace {
+void
+topologyInitProgress(const std::string &stage)
+{
+    if (!std::getenv("OMELET_INIT_PROGRESS"))
+        return;
+    static const auto started = std::chrono::steady_clock::now();
+    static std::mutex output_mutex;
+    const std::lock_guard<std::mutex> guard(output_mutex);
+    const double elapsed = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - started).count();
+    std::cout << "OMELET_INIT topology " << stage
+              << "; elapsed_s=" << elapsed << std::endl;
+}
+} // anonymous namespace
 
 const int INFINITE_LATENCY = 10000; // Yes, this is a big hack
 
@@ -71,6 +90,9 @@ Topology::Topology(uint32_t num_nodes, uint32_t num_routers,
 {
     // Total nodes/controllers in network
     assert(m_nodes > 1);
+    topologyInitProgress("constructor started; controllers=" +
+        std::to_string(m_nodes) + " routers=" +
+        std::to_string(m_number_of_switches));
 
     // analyze both the internal and external links, create data structures.
     // The python created external links are bi-directional,
@@ -83,6 +105,10 @@ Topology::Topology(uint32_t num_nodes, uint32_t num_routers,
     for (std::vector<BasicExtLink*>::const_iterator i = ext_links.begin();
          i != ext_links.end(); ++i) {
         BasicExtLink *ext_link = (*i);
+        const auto processed = i - ext_links.begin();
+        if (processed % 1024 == 0)
+            topologyInitProgress("external link map processed=" +
+                std::to_string(processed) + "/" + std::to_string(ext_links.size()));
         AbstractController *abs_cntrl = ext_link->params().ext_node;
         BasicRouter *router = ext_link->params().int_node;
 
@@ -102,6 +128,10 @@ Topology::Topology(uint32_t num_nodes, uint32_t num_routers,
     for (std::vector<BasicIntLink*>::const_iterator i = int_links.begin();
          i != int_links.end(); ++i) {
         BasicIntLink *int_link = (*i);
+        const auto processed = i - int_links.begin();
+        if (processed % 1024 == 0)
+            topologyInitProgress("internal link map processed=" +
+                std::to_string(processed) + "/" + std::to_string(int_links.size()));
         BasicRouter *router_src = int_link->params().src_node;
         BasicRouter *router_dst = int_link->params().dst_node;
 
@@ -117,11 +147,15 @@ Topology::Topology(uint32_t num_nodes, uint32_t num_routers,
         // create the internal uni-directional link from src to dst
         addLink(src, dst, int_link, src_outport, dst_inport);
     }
+    topologyInitProgress("constructor completed; link groups=" +
+                         std::to_string(m_link_map.size()));
 }
 
 void
 Topology::createLinks(Network *net)
 {
+    topologyInitProgress("createLinks started; link groups=" +
+                         std::to_string(m_link_map.size()));
     // Find maximum switchID
     SwitchID max_switch_id = 0;
     for (LinkMap::const_iterator i = m_link_map.begin();
@@ -133,16 +167,25 @@ Topology::createLinks(Network *net)
 
     // Initialize weight, latency, and inter switched vectors
     int num_switches = max_switch_id+1;
+    const double matrix_gib = static_cast<double>(m_vnets) * num_switches *
+        num_switches * sizeof(int) / (1024.0 * 1024 * 1024);
+    topologyInitProgress("allocating weights matrix; switches=" +
+        std::to_string(num_switches) + " vnets=" + std::to_string(m_vnets) +
+        " integer_payload_GiB_per_matrix=" + std::to_string(matrix_gib) +
+        "; weights/latencies/inter-switches are three matrices; row overhead excluded");
     Matrix topology_weights(m_vnets,
             std::vector<std::vector<int>>(num_switches,
             std::vector<int>(num_switches, INFINITE_LATENCY)));
+    topologyInitProgress("weights allocated; allocating latency matrix");
     Matrix component_latencies(num_switches,
             std::vector<std::vector<int>>(num_switches,
             std::vector<int>(m_vnets, -1)));
+    topologyInitProgress("latency matrix allocated; allocating inter-switch matrix");
     Matrix component_inter_switches(num_switches,
             std::vector<std::vector<int>>(num_switches,
             std::vector<int>(m_vnets, 0)));
 
+    topologyInitProgress("three matrices allocated; initializing weights");
     // Set identity weights to zero
     for (int i = 0; i < topology_weights[0].size(); i++) {
         for (int v = 0; v < m_vnets; v++) {
@@ -191,10 +234,14 @@ Topology::createLinks(Network *net)
     }
 
     // Walk topology and hookup the links
+    topologyInitProgress("weights populated; shortest paths started");
     Matrix dist = shortest_path(topology_weights, component_latencies,
                                 component_inter_switches);
 
     for (int i = 0; i < topology_weights[0].size(); i++) {
+        if (i % 1024 == 0)
+            topologyInitProgress("installing link routes; source rows processed=" +
+                std::to_string(i) + "/" + std::to_string(num_switches));
         for (int j = 0; j < topology_weights[0][i].size(); j++) {
             std::vector<NetDest> routingMap;
             routingMap.resize(m_vnets);
@@ -220,6 +267,7 @@ Topology::createLinks(Network *net)
             }
         }
     }
+    topologyInitProgress("createLinks completed");
 }
 
 void
@@ -406,13 +454,19 @@ Topology::shortest_path(const Matrix &weights, Matrix &latencies,
     // independent, so sparse shortest-path searches can run concurrently.
     (void)latencies;
     (void)inter_switches;
+    topologyInitProgress("allocating distance matrix by copying weights");
     Matrix dist = weights;
+    topologyInitProgress("distance matrix allocated; building adjacency lists");
     const int nodes = weights[0].size();
     using Edge = std::pair<int, int>;
     std::vector<std::vector<std::vector<Edge>>> edges(
         m_vnets, std::vector<std::vector<Edge>>(nodes));
     for (int vnet = 0; vnet < m_vnets; ++vnet) {
         for (int src = 0; src < nodes; ++src) {
+            if (src % 1024 == 0)
+                topologyInitProgress("adjacency vnet=" + std::to_string(vnet) +
+                    " source rows processed=" + std::to_string(src) + "/" +
+                    std::to_string(nodes));
             for (int dst = 0; dst < nodes; ++dst) {
                 const int weight = weights[vnet][src][dst];
                 if (src != dst && weight > 0 && weight < INFINITE_LATENCY) {
@@ -440,6 +494,8 @@ Topology::shortest_path(const Matrix &weights, Matrix &latencies,
     inform("Omelet routing table: %u host threads for %d source rows",
            workers, jobs);
     std::atomic<int> next_job{0};
+    std::atomic<int> completed_jobs{0};
+    const bool report_init_progress = std::getenv("OMELET_INIT_PROGRESS");
     const auto work = [&]() {
         for (int job = next_job.fetch_add(1); job < jobs;
              job = next_job.fetch_add(1)) {
@@ -464,8 +520,16 @@ Topology::shortest_path(const Matrix &weights, Matrix &latencies,
                     }
                 }
             }
+            if (report_init_progress) {
+                const int done = completed_jobs.fetch_add(1) + 1;
+                if (done % 1024 == 0 || done == jobs)
+                    topologyInitProgress("shortest paths completed rows=" +
+                        std::to_string(done) + "/" + std::to_string(jobs));
+            }
         }
     };
+    topologyInitProgress("adjacency lists ready; parallel shortest paths started; rows=" +
+                         std::to_string(jobs));
     std::vector<std::future<void>> tasks;
     tasks.reserve(workers > 0 ? workers - 1 : 0);
     for (unsigned worker = 1; worker < workers; ++worker) {
@@ -475,6 +539,7 @@ Topology::shortest_path(const Matrix &weights, Matrix &latencies,
     for (auto &task : tasks) {
         task.get();
     }
+    topologyInitProgress("shortest paths completed; source rows=" + std::to_string(jobs));
     return dist;
 }
 

@@ -40,6 +40,7 @@
 import atexit
 import os
 import sys
+import time
 
 # import the wrapped C++ functions
 import _m5.drain
@@ -69,6 +70,34 @@ _instantiated = False  # Has m5.instantiate() been called?
 def instantiate(ckpt_dir=None):
     global _instantiated
     from m5 import options
+    import m5
+
+    # Optional display flag set by Omelet; never a simulation input.
+    progress_enabled = getattr(m5, "_omelet_init_progress", False)
+    started = time.monotonic()
+
+    def progress(stage):
+        if progress_enabled:
+            print(f"OMELET_INIT instantiate {stage}; elapsed_s={time.monotonic() - started:.1f}", flush=True)
+
+    def progress_objects(iterable, stage):
+        if not progress_enabled:
+            yield from iterable
+            return
+        stage_started = time.monotonic()
+        progress(f"{stage} started")
+        count = 0
+        for obj in iterable:
+            if count % 1024 == 0:
+                progress(f"{stage} processed={count}; next={type(obj).__name__}")
+            is_network = type(obj).__name__ == "GarnetNetwork"
+            if is_network:
+                progress(f"{stage} GarnetNetwork started")
+            yield obj
+            count += 1
+            if is_network:
+                progress(f"{stage} GarnetNetwork completed")
+        progress(f"{stage} completed objects={count}; stage_s={time.monotonic() - stage_started:.1f}")
 
     if _instantiated:
         fatal("m5.instantiate() called twice.")
@@ -85,17 +114,18 @@ def instantiate(ckpt_dir=None):
 
     # Make sure SimObject-valued params are in the configuration
     # hierarchy so we catch them with future descendants() walks
-    for obj in root.descendants():
+    for obj in progress_objects(root.descendants(), "adopting object parameters"):
         obj.adoptOrphanParams()
 
     # Unproxy in sorted order for determinism
-    for obj in root.descendants():
+    for obj in progress_objects(root.descendants(), "resolving parameter proxies"):
         obj.unproxyParams()
 
     if options.dump_config:
+        progress("sorting objects for config.ini started")
         ini_file = open(os.path.join(options.outdir, options.dump_config), "w")
         # Print ini sections in sorted order for easier diffing
-        for obj in sorted(root.descendants(), key=lambda o: o.path()):
+        for obj in progress_objects(sorted(root.descendants(), key=lambda o: o.path()), "writing config.ini"):
             obj.print_ini(ini_file)
         ini_file.close()
 
@@ -106,39 +136,46 @@ def instantiate(ckpt_dir=None):
             json_file = open(
                 os.path.join(options.outdir, options.json_config), "w"
             )
+            progress("collecting config.json object hierarchy started")
             d = root.get_config_as_dict()
+            progress("collecting config.json object hierarchy completed; writing JSON started")
             json.dump(d, json_file, indent=4)
             json_file.close()
+            progress("writing config.json completed")
         except ImportError:
             pass
 
     if options.dot_config:
+        progress("writing DOT configuration started")
         do_dot(root, options.outdir, options.dot_config)
         do_ruby_dot(root, options.outdir, options.dot_config)
+        progress("writing DOT configuration completed")
 
     # Initialize the global statistics
     stats.initSimStats()
 
     # Create the C++ sim objects and connect ports
-    for obj in root.descendants():
+    for obj in progress_objects(root.descendants(), "creating C++ objects"):
         obj.createCCObject()
-    for obj in root.descendants():
+    for obj in progress_objects(root.descendants(), "connecting ports"):
         obj.connectPorts()
 
     # Do a second pass to finish initializing the sim objects
-    for obj in root.descendants():
+    for obj in progress_objects(root.descendants(), "initializing objects and network routing"):
         obj.init()
 
     # Do a third pass to initialize statistics
+    progress("binding statistics hierarchy started")
     stats._bindStatHierarchy(root)
     root.regStats()
+    progress("binding statistics hierarchy completed")
 
     # Do a fourth pass to initialize probe points
-    for obj in root.descendants():
+    for obj in progress_objects(root.descendants(), "registering probe points"):
         obj.regProbePoints()
 
     # Do a fifth pass to connect probe listeners
-    for obj in root.descendants():
+    for obj in progress_objects(root.descendants(), "registering probe listeners"):
         obj.regProbeListeners()
 
     # We want to generate the DVFS diagram for the system. This can only be
@@ -154,15 +191,16 @@ def instantiate(ckpt_dir=None):
     if ckpt_dir:
         _drain_manager.preCheckpointRestore()
         ckpt = _m5.core.getCheckpoint(ckpt_dir)
-        for obj in root.descendants():
+        for obj in progress_objects(root.descendants(), "loading checkpoint state"):
             obj.loadState(ckpt)
     else:
-        for obj in root.descendants():
+        for obj in progress_objects(root.descendants(), "initializing object state"):
             obj.initState()
 
     # Check to see if any of the stat events are in the past after resuming from
     # a checkpoint, If so, this call will shift them to be at a valid time.
     updateStatEvents()
+    progress("completed")
 
 
 need_startup = True

@@ -4,7 +4,7 @@ from m5.objects import *
 from m5.defines import buildEnv
 from m5.util import addToPath
 from m5.util.convert import toMemorySize
-import os, argparse, json, sys
+import os, argparse, json, sys, time
 
 addToPath("../")
 
@@ -95,6 +95,11 @@ parser.add_argument("--online-control", action="store_true")
 
 args = parser.parse_args()
 
+_init_started = time.monotonic()
+def init_progress(stage):
+    print(f"OMELET_INIT {stage}; wall_s={time.monotonic() - _init_started:.1f}", flush=True)
+
+init_progress(f"creating traffic endpoints count={args.num_cpus}")
 cpus = [
     GarnetSyntheticTraffic(
         num_packets_max=args.num_packets_max,
@@ -121,7 +126,9 @@ system.clk_domain = SrcClockDomain(
     clock=args.sys_clock, voltage_domain=system.voltage_domain
 )
 
+init_progress("creating Ruby controllers and network topology")
 Ruby.create_system(args, False, system)
+init_progress("Ruby controllers and topology created; connecting traffic endpoints")
 
 system.ruby.clk_domain = SrcClockDomain(
     clock=args.ruby_clock, voltage_domain=system.voltage_domain
@@ -138,7 +145,12 @@ root.system.mem_mode = "timing"
 
 m5.ticks.setGlobalFrequency("1ps")
 
+init_progress("m5.instantiate: creating C++ objects, connecting ports and initializing network")
+m5._omelet_init_progress = args.online_control
+if args.online_control:
+    os.environ["OMELET_INIT_PROGRESS"] = "1"
 m5.instantiate()
+init_progress("m5.instantiate completed; network ready")
 
 if args.online_control:
     print("OMELET_ONLINE " + json.dumps({"ready": True, "tick": m5.curTick()}), flush=True)

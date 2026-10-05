@@ -39,6 +39,7 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 import sys
+import time
 from types import FunctionType, MethodType, ModuleType
 from functools import wraps
 import inspect
@@ -1179,6 +1180,10 @@ class SimObject(object, metaclass=MetaSimObject):
     def getCCParams(self):
         if self._ccParams:
             return self._ccParams
+        report_network = type(self).__name__ == "GarnetNetwork" and getattr(m5, "_omelet_init_progress", False)
+        if report_network:
+            network_started = time.monotonic()
+            print("OMELET_INIT GarnetNetwork collecting C++ parameters and referenced objects started", flush=True)
 
         # Ensure that m5.internal.params is available.
         import m5.internal.params
@@ -1228,6 +1233,8 @@ class SimObject(object, metaclass=MetaSimObject):
                 port_count,
             )
         self._ccParams = cc_params
+        if report_network:
+            print(f"OMELET_INIT GarnetNetwork collecting C++ parameters completed; stage_s={time.monotonic() - network_started:.1f}", flush=True)
         return self._ccParams
 
     # Get C++ object corresponding to this object, calling C++ if
@@ -1243,7 +1250,13 @@ class SimObject(object, metaclass=MetaSimObject):
             self._ccObject = -1
             if not self.abstract:
                 params = self.getCCParams()
+                report_network = type(self).__name__ == "GarnetNetwork" and getattr(m5, "_omelet_init_progress", False)
+                if report_network:
+                    network_started = time.monotonic()
+                    print("OMELET_INIT GarnetNetwork C++ constructor started", flush=True)
                 self._ccObject = params.create()
+                if report_network:
+                    print(f"OMELET_INIT GarnetNetwork C++ constructor completed; stage_s={time.monotonic() - network_started:.1f}", flush=True)
         elif self._ccObject == -1:
             raise RuntimeError(
                 "%s: Cycle found in configuration hierarchy." % self.path()

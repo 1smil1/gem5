@@ -67,7 +67,12 @@ def create_system(
     # controller constructors are called before the network constructor
     #
 
+    import time
+    init_started = time.monotonic()
+    print(f"OMELET_INIT creating Ruby controllers count={options.num_cpus}", flush=True)
     for i in range(options.num_cpus):
+        if i % 1000 == 0:
+            print(f"OMELET_INIT Ruby controllers {i}/{options.num_cpus}; wall_s={time.monotonic() - init_started:.1f}", flush=True)
         #
         # First create the Ruby objects associated with this cpu
         # Only one cache exists for this protocol, so by default use the L1D
@@ -99,9 +104,11 @@ def create_system(
         l1_cntrl.responseFromCache = MessageBuffer()
         l1_cntrl.forwardFromCache = MessageBuffer()
 
+    print(f"OMELET_INIT Ruby controllers created; creating directory controllers; wall_s={time.monotonic() - init_started:.1f}", flush=True)
     mem_dir_cntrl_nodes, rom_dir_cntrl_node = create_directories(
         options, bootmem, ruby_system, system
     )
+    print(f"OMELET_INIT directory controllers created; wall_s={time.monotonic() - init_started:.1f}", flush=True)
     dir_cntrl_nodes = mem_dir_cntrl_nodes[:]
     if rom_dir_cntrl_node is not None:
         dir_cntrl_nodes.append(rom_dir_cntrl_node)

@@ -19,17 +19,34 @@ class mesh_nox(SimpleTopology):
         self.nodes = ctrls
     
     def makeTopology(self, opts, net, IntLink, ExtLink, Router):
+        import time
+        from pathlib import Path
+        init_started = time.monotonic()
+        def progress(stage):
+            print(f"OMELET_INIT {stage}; wall_s={time.monotonic() - init_started:.1f}", flush=True)
+        def read_config(label, filename, loader):
+            path = Path(filename)
+            progress(f"reading {label}: path={path.resolve()} bytes={path.stat().st_size}")
+            started = time.monotonic()
+            with path.open(encoding="utf-8") as stream:
+                config = loader(stream)
+            if not isinstance(config, dict):
+                raise ValueError(f"{label} must contain a mapping: {path}")
+            progress(f"read {label} completed; read_s={time.monotonic() - started:.1f}")
+            return config
+        progress("loading network configuration and technology tables")
 
-        self.sys_cfg = yaml.safe_load(open(opts.sys_config))
+        self.sys_cfg = read_config("system YAML", opts.sys_config, yaml.safe_load)
         if getattr(opts, "net_config", None):
-            self.sys_cfg.update(yaml.safe_load(open(opts.net_config)) or {})
+            self.sys_cfg.update(read_config("network YAML", opts.net_config, yaml.safe_load))
+        progress("creating link technology library")
         self.link_lib = Linklib(opts.material, len(self.sys_cfg["noc_routers_per_chiplet"]))
-        self.noi_cfg = yaml.safe_load(open(opts.noi_config))
-        self.plc_cfg = yaml.safe_load(open(opts.plc_config))
+        progress("link technology library created")
+        self.noi_cfg = read_config("NoI YAML", opts.noi_config, yaml.safe_load)
+        self.plc_cfg = read_config("placement YAML", opts.plc_config, yaml.safe_load)
         self.nonuniform_grid = None
         if getattr(opts, "nonuniform_grid_config", None):
-            with open(opts.nonuniform_grid_config, encoding="utf-8") as f:
-                self.nonuniform_grid = json.load(f)
+            self.nonuniform_grid = read_config("nonuniform grid JSON", opts.nonuniform_grid_config, json.load)
         self.noc_cfg = []
            
         nodes = self.nodes
@@ -37,9 +54,12 @@ class mesh_nox(SimpleTopology):
         mem_ctrls = 0
         total_cpus = opts.num_cpus + mem_ctrls
 
-        noc_one = yaml.safe_load(open(opts.noc_config))
+        noc_one = read_config("NoC YAML", opts.noc_config, yaml.safe_load)
+        progress(f"preparing per-chiplet NoC configuration; chiplets={num_chiplets}")
         for chiplet_i in range(num_chiplets):
             cfg = dict(noc_one)
+            if chiplet_i % 100 == 0:
+                progress(f"per-chiplet NoC configuration {chiplet_i}/{num_chiplets}")
             if self.nonuniform_grid is not None:
                 shape = self.nonuniform_grid["chiplets"][str(chiplet_i)]["grid"]
                 cfg["mesh_rows"] = int(shape[1])
@@ -52,12 +72,15 @@ class mesh_nox(SimpleTopology):
         int_links = []
         ext_links = []
 
+        progress(f"creating NoC routers and endpoint links; chiplets={num_chiplets}")
         noc_routers = []
         router_id = 0
         router_map = {}
         for chiplet_i in range(num_chiplets):
             role = f"chiplet{chiplet_i}"
             router_map[role] = []
+            if chiplet_i % 100 == 0:
+                progress(f"NoC routers and endpoint links {chiplet_i}/{num_chiplets}")
             num_routers = noc_routers_per_chiplet_list[role]
 
             for _ in range(num_routers):
@@ -74,6 +97,7 @@ class mesh_nox(SimpleTopology):
                     clock = self.sys_cfg["chiplet_clock"],
                     voltage_domain = VoltageDomain(
                     voltage = self.sys_cfg["sys_voltage"]))
+                noc_routers[curr_router_id].clk_domain = chiplet_clk_domain
                 ext_links.append(ExtLink(link_id=link_cnt,
                                         ext_node=nodes[curr_router_id],
                                         int_node=noc_routers[curr_router_id],
@@ -100,12 +124,15 @@ class mesh_nox(SimpleTopology):
         noi_routers = []
         router_map["interposer"] = []
         noi_rtr_width = noi_router_width(opts, self.link_lib, self.sys_cfg, self.plc_cfg)
+        noi_clk_domain = SrcClockDomain(clock=self.sys_cfg["noi_clock"],
+            voltage_domain=VoltageDomain(voltage=self.sys_cfg["sys_voltage"]))
 
         for i in range(self.noi_cfg["num_routers"]):
             role = "interposer"
             noi_rtr_lat = self.sys_cfg["router_latency"]["interposer"]
             noi_routers.append(Router(router_id=router_id, 
                                       latency=noi_rtr_lat,
+                                      clk_domain=noi_clk_domain,
                                       width=noi_rtr_width, 
                                       role=role))
             
@@ -114,11 +141,14 @@ class mesh_nox(SimpleTopology):
             router_id += 1
 
         net.routers = noc_routers + noi_routers
+        progress(f"routers created count={len(net.routers)}; creating intra-chiplet links")
 
         for chiplet_i in range(num_chiplets):
             role = f"chiplet{chiplet_i}"
             rows = self.noc_cfg[chiplet_i]["mesh_rows"]
             cols = noc_routers_per_chiplet_list[role] // rows
+            if chiplet_i % 100 == 0:
+                progress(f"intra-chiplet links {chiplet_i}/{num_chiplets}")
             intra_int, num_new_links = build_intra_chiplet(
                 opts, self.link_lib, self.noc_cfg[chiplet_i], self.sys_cfg, self.plc_cfg, 
                 net, net.routers, IntLink, router_map[role][0], link_cnt,
@@ -137,6 +167,7 @@ class mesh_nox(SimpleTopology):
             link_cnt += num_new_links
 
 
+        progress("creating NoC-NoI boundary links")
         noc_noi_connect_int, num_new_links = connect_noi_noc(
             opts, self.link_lib, self.noc_cfg, self.noi_cfg, self.sys_cfg, self.plc_cfg, 
             net, net.routers, IntLink, nodes, link_cnt, noc_routers_per_chiplet_list, router_map,
@@ -147,7 +178,9 @@ class mesh_nox(SimpleTopology):
 
 
 
+        progress(f"validating endpoint links; internal={len(int_links)} external={len(ext_links)}")
         sanity_check_controller_links(nodes, net.routers, ext_links)
+        progress("network topology complete")
         net.int_links = int_links
         net.ext_links = ext_links
 
