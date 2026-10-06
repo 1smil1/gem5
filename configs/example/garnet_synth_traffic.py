@@ -149,6 +149,55 @@ init_progress("m5.instantiate: creating C++ objects, connecting ports and initia
 m5._omelet_init_progress = args.online_control
 if args.online_control:
     os.environ["OMELET_INIT_PROGRESS"] = "1"
+if args.online_control and os.environ.get("OMELET_STATS_TRACE") == "1":
+    original_visit_stats = m5.stats._visit_stats
+
+    def trace_visit_stats(visitor, root=None):
+        visited = 0
+
+        def visit(group, stat):
+            nonlocal visited
+            dimension = stat.size if hasattr(stat, "size") else None
+            if stat.name in (
+                "system.mem_ctrls0000.dram.bytesRead",
+                "system.mem_ctrls0000.requestorReadAccesses",
+            ):
+                init_progress(f"requestor statistic name={stat.name} size={dimension}")
+            if dimension is not None and dimension > 100000:
+                init_progress(f"large statistic name={stat.name} size={dimension}")
+            try:
+                visitor(group, stat)
+            except MemoryError:
+                init_progress(
+                    f"statistic allocation failed name={stat.name} "
+                    f"type={type(stat).__name__} size={dimension} "
+                    f"visitor={visitor.__name__} visited={visited}"
+                )
+                raise
+            visited += 1
+            if visited % 65536 == 0:
+                init_progress(f"statistics visitor={visitor.__name__} visited={visited}")
+
+        return original_visit_stats(visit, root=root)
+
+    m5.stats._visit_stats = trace_visit_stats
+
+if args.online_control:
+    original_enable_stats = m5.stats.enable
+
+    def enable_stats_with_progress():
+        init_progress("enabling statistics started")
+        result = original_enable_stats()
+        init_progress("enabling statistics completed")
+        return result
+
+    m5.stats.enable = enable_stats_with_progress
+
+if args.online_control and os.environ.get("OMELET_COMM_DUMP_STATS") == "0":
+    # config.ini also registers SimObjects; keep it. JSON/DOT are debug copies.
+    m5.options.json_config = ""
+    m5.options.dot_config = ""
+    m5.options.dot_dvfs_config = ""
 m5.instantiate()
 init_progress("m5.instantiate completed; network ready")
 
@@ -185,6 +234,10 @@ if args.online_control:
             raise ValueError(f"unknown online operation: {op}")
         print("OMELET_ONLINE " + json.dumps(result), flush=True)
         if op == "quit":
+            if os.environ.get("OMELET_COMM_DUMP_STATS") == "0":
+                # Only the optional dump is removed; gem5 exit cleanup remains.
+                import atexit
+                atexit.unregister(m5.stats.dump)
             break
 else:
     exit_event = m5.simulate(args.abs_max_tick)

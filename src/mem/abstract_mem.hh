@@ -177,6 +177,12 @@ class AbstractMemory : public ClockedObject
         void regStats() override;
 
         const AbstractMemory &mem;
+        const bool aggregateRequestors;
+
+        RequestorID requestorIndex(RequestorID id) const
+        {
+            return aggregateRequestors ? 0 : id;
+        }
 
         /** Number of total bytes read from this memory */
         statistics::Vector bytesRead;

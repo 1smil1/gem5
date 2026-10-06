@@ -258,8 +258,8 @@ class GarnetNetwork : public Network
     statistics::Scalar  m_total_hops;
     statistics::Formula m_avg_hops;
 
-    std::vector<std::vector<statistics::Scalar *>> m_data_traffic_distribution;
-    std::vector<std::vector<statistics::Scalar *>> m_ctrl_traffic_distribution;
+    std::vector<statistics::SparseHistogram *> m_data_traffic_distribution;
+    std::vector<statistics::SparseHistogram *> m_ctrl_traffic_distribution;
 
   private:
     GarnetNetwork(const GarnetNetwork& obj);

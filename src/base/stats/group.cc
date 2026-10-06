@@ -37,6 +37,11 @@
 
 #include "base/stats/group.hh"
 
+#include <cstdlib>
+#include <iostream>
+#include <new>
+#include <typeinfo>
+
 #include "base/compiler.hh"
 #include "base/logging.hh"
 #include "base/named.hh"
@@ -68,8 +73,29 @@ Group::~Group()
 void
 Group::regStats()
 {
+    // Optional diagnostics: identify the exact group failing allocation.
+    static const bool report = std::getenv("OMELET_INIT_PROGRESS") != nullptr;
+    static unsigned long registered = 0;
+    const auto register_group = [&](Group *group, const char *name) {
+        const Named *named = dynamic_cast<const Named *>(group);
+        if (report && ++registered % 5000 == 0) {
+            std::cout << "OMELET_INIT statistics groups=" << registered
+                      << " next=" << (named ? named->name() : name)
+                      << " type=" << typeid(*group).name() << std::endl;
+        }
+        try {
+            group->regStats();
+        } catch (const std::bad_alloc &) {
+            if (report) {
+                std::cout << "OMELET_INIT statistics allocation failed group="
+                          << (named ? named->name() : name)
+                          << " type=" << typeid(*group).name() << std::endl;
+            }
+            throw;
+        }
+    };
     for (auto &g : mergedStatGroups)
-        g->regStats();
+        register_group(g, "merged");
 
     for (auto &g : statGroups) {
         if (debug::Stats) {
@@ -78,7 +104,7 @@ Group::regStats()
                     named ? named->name() : "?",
                     g.first);
         }
-        g.second->regStats();
+        register_group(g.second, g.first.c_str());
     }
 }
 

@@ -599,7 +599,7 @@ Topology::shortest_path(const WeightMatrix &weights)
     const bool report_init_progress = std::getenv("OMELET_INIT_PROGRESS");
 
     // Per (vnet, src) DistVector allocated once and filled in by the worker
-    // assigned to that source row. Total memory is O(vnets * num_switches).
+    // assigned to that source row. Retained memory is O(vnets * num_switches^2).
     topologyInitProgress("allocating per-source distance rows; total=" +
                          std::to_string(jobs));
     DistMatrix dist;

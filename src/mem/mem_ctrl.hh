@@ -566,6 +566,12 @@ class MemCtrl : public qos::MemCtrl
         void regStats() override;
 
         MemCtrl &ctrl;
+        const bool aggregateRequestors;
+
+        RequestorID requestorIndex(RequestorID id) const
+        {
+            return aggregateRequestors ? 0 : id;
+        }
 
         // All statistics that the model needs to capture
         statistics::Scalar readReqs;

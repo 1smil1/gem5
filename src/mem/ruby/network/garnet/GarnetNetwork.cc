@@ -624,25 +624,17 @@ GarnetNetwork::regStats()
             statistics::oneline)
         ;
 
-    // Traffic distribution
+    // Exact per-source destination counts, with bins only for observed
+    // traffic. Register O(routers) stats rather than O(routers^2) Scalars.
     for (int source = 0; source < m_routers.size(); ++source) {
-        m_data_traffic_distribution.push_back(
-            std::vector<statistics::Scalar *>());
-        m_ctrl_traffic_distribution.push_back(
-            std::vector<statistics::Scalar *>());
-
-        for (int dest = 0; dest < m_routers.size(); ++dest) {
-            statistics::Scalar *data_packets = new statistics::Scalar();
-            statistics::Scalar *ctrl_packets = new statistics::Scalar();
-
-            data_packets->name(name() + ".data_traffic_distribution." + "n" +
-                    std::to_string(source) + "." + "n" + std::to_string(dest));
-            m_data_traffic_distribution[source].push_back(data_packets);
-
-            ctrl_packets->name(name() + ".ctrl_traffic_distribution." + "n" +
-                    std::to_string(source) + "." + "n" + std::to_string(dest));
-            m_ctrl_traffic_distribution[source].push_back(ctrl_packets);
-        }
+        auto *data_packets = new statistics::SparseHistogram();
+        auto *ctrl_packets = new statistics::SparseHistogram();
+        data_packets->init(0).name(name() + ".data_traffic_distribution.n" +
+                                 std::to_string(source));
+        ctrl_packets->init(0).name(name() + ".ctrl_traffic_distribution.n" +
+                                 std::to_string(source));
+        m_data_traffic_distribution.push_back(data_packets);
+        m_ctrl_traffic_distribution.push_back(ctrl_packets);
     }
 }
 
@@ -706,9 +698,9 @@ GarnetNetwork::update_traffic_distribution(RouteInfo route)
     int vnet = route.vnet;
 
     if (m_vnet_type[vnet] == DATA_VNET_)
-        (*m_data_traffic_distribution[src_node][dest_node])++;
+        m_data_traffic_distribution[src_node]->sample(dest_node);
     else
-        (*m_ctrl_traffic_distribution[src_node][dest_node])++;
+        m_ctrl_traffic_distribution[src_node]->sample(dest_node);
 }
 
 bool

@@ -88,7 +88,7 @@ def instantiate(ckpt_dir=None):
         progress(f"{stage} started")
         count = 0
         for obj in iterable:
-            if count % 1024 == 0:
+            if count % 5000 == 0:
                 progress(f"{stage} processed={count}; next={type(obj).__name__}")
             is_network = type(obj).__name__ == "GarnetNetwork"
             if is_network:

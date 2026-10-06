@@ -40,6 +40,8 @@
 
 #include "mem/mem_ctrl.hh"
 
+#include <cstdlib>
+
 #include "base/trace.hh"
 #include "debug/DRAM.hh"
 #include "debug/Drain.hh"
@@ -214,7 +216,7 @@ MemCtrl::addToReadQueue(PacketPtr pkt,
                         base_addr + pkt->getSize()) - addr;
         stats.readPktSize[ceilLog2(size)]++;
         stats.readBursts++;
-        stats.requestorReadAccesses[pkt->requestorId()]++;
+        stats.requestorReadAccesses[stats.requestorIndex(pkt->requestorId())]++;
 
         // First check write buffer to see if the data is already at
         // the controller
@@ -318,7 +320,7 @@ MemCtrl::addToWriteQueue(PacketPtr pkt, unsigned int pkt_count,
                         base_addr + pkt->getSize()) - addr;
         stats.writePktSize[ceilLog2(size)]++;
         stats.writeBursts++;
-        stats.requestorWriteAccesses[pkt->requestorId()]++;
+        stats.requestorWriteAccesses[stats.requestorIndex(pkt->requestorId())]++;
 
         // see if we can merge with an existing item in the write
         // queue and keep track of whether we have merged or not
@@ -815,13 +817,13 @@ MemCtrl::doBurstAccess(MemPacket* mem_pkt, MemInterface* mem_intr)
     if (mem_pkt->isRead()) {
         ++readsThisTime;
         // Update latency stats
-        stats.requestorReadTotalLat[mem_pkt->requestorId()] +=
+        stats.requestorReadTotalLat[stats.requestorIndex(mem_pkt->requestorId())] +=
             mem_pkt->readyTime - mem_pkt->entryTime;
-        stats.requestorReadBytes[mem_pkt->requestorId()] += mem_pkt->size;
+        stats.requestorReadBytes[stats.requestorIndex(mem_pkt->requestorId())] += mem_pkt->size;
     } else {
         ++writesThisTime;
-        stats.requestorWriteBytes[mem_pkt->requestorId()] += mem_pkt->size;
-        stats.requestorWriteTotalLat[mem_pkt->requestorId()] +=
+        stats.requestorWriteBytes[stats.requestorIndex(mem_pkt->requestorId())] += mem_pkt->size;
+        stats.requestorWriteTotalLat[stats.requestorIndex(mem_pkt->requestorId())] +=
             mem_pkt->readyTime - mem_pkt->entryTime;
     }
 
@@ -1165,6 +1167,8 @@ MemCtrl::pktSizeCheck(MemPacket* mem_pkt, MemInterface* mem_intr) const
 MemCtrl::CtrlStats::CtrlStats(MemCtrl &_ctrl)
     : statistics::Group(&_ctrl),
     ctrl(_ctrl),
+    aggregateRequestors(
+        std::getenv("OMELET_COMM_AGGREGATE_REQUESTORS") != nullptr),
 
     ADD_STAT(readReqs, statistics::units::Count::get(),
              "Number of read requests accepted"),
@@ -1265,7 +1269,9 @@ MemCtrl::CtrlStats::regStats()
     using namespace statistics;
 
     assert(ctrl.system());
-    const auto max_requestors = ctrl.system()->maxRequestors();
+    // Aggregation changes only diagnostic detail, never memory service.
+    const auto max_requestors = aggregateRequestors ? 1 :
+        ctrl.system()->maxRequestors();
 
     avgRdQLen.precision(2);
     avgWrQLen.precision(2);
@@ -1330,7 +1336,8 @@ MemCtrl::CtrlStats::regStats()
         .precision(2);
 
     for (int i = 0; i < max_requestors; i++) {
-        const std::string requestor = ctrl.system()->getRequestorName(i);
+        const std::string requestor = aggregateRequestors ? "all_requestors" :
+            ctrl.system()->getRequestorName(i);
         requestorReadBytes.subname(i, requestor);
         requestorReadRate.subname(i, requestor);
         requestorWriteBytes.subname(i, requestor);

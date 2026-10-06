@@ -89,8 +89,8 @@ struct WeightMatrix
     int get(int vnet, int src, int dst) const;
 };
 
-// Per-source distance row, length num_switches. Allocated once per
-// Dijkstra worker, never copied across sources.
+// Per-source distance row, length num_switches. Workers move completed
+// rows into DistMatrix; all source rows remain available for route marking.
 struct DistVector
 {
     int n = 0;
@@ -104,7 +104,8 @@ struct DistVector
 };
 
 // Per-(vnet, src) distance storage returned by shortest_path(). Total
-// memory is O(vnets * num_switches) ints, not O(vnets * num_switches^2).
+// memory is O(vnets * num_switches^2) ints. Sparse weights do not make
+// this all-pairs distance storage sparse.
 struct DistMatrix
 {
     int n = 0;

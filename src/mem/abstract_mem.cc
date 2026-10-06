@@ -40,6 +40,7 @@
 
 #include "mem/abstract_mem.hh"
 
+#include <cstdlib>
 #include <vector>
 
 #include "base/loader/memory_image.hh"
@@ -116,6 +117,8 @@ AbstractMemory::setBackingStore(uint8_t* pmem_addr)
 
 AbstractMemory::MemStats::MemStats(AbstractMemory &_mem)
     : statistics::Group(&_mem), mem(_mem),
+    aggregateRequestors(
+        std::getenv("OMELET_COMM_AGGREGATE_REQUESTORS") != nullptr),
     ADD_STAT(bytesRead, statistics::units::Byte::get(),
              "Number of bytes read from this memory"),
     ADD_STAT(bytesInstRead, statistics::units::Byte::get(),
@@ -153,14 +156,14 @@ AbstractMemory::MemStats::regStats()
 
     System *sys = mem.system();
     assert(sys);
-    const auto max_requestors = sys->maxRequestors();
+    const auto max_requestors = aggregateRequestors ? 1 : sys->maxRequestors();
 
     bytesRead
         .init(max_requestors)
         .flags(total | nozero | nonan)
         ;
     for (int i = 0; i < max_requestors; i++) {
-        bytesRead.subname(i, sys->getRequestorName(i));
+        bytesRead.subname(i, (aggregateRequestors ? "all_requestors" : sys->getRequestorName(i)));
     }
 
     bytesInstRead
@@ -168,7 +171,7 @@ AbstractMemory::MemStats::regStats()
         .flags(total | nozero | nonan)
         ;
     for (int i = 0; i < max_requestors; i++) {
-        bytesInstRead.subname(i, sys->getRequestorName(i));
+        bytesInstRead.subname(i, (aggregateRequestors ? "all_requestors" : sys->getRequestorName(i)));
     }
 
     bytesWritten
@@ -176,7 +179,7 @@ AbstractMemory::MemStats::regStats()
         .flags(total | nozero | nonan)
         ;
     for (int i = 0; i < max_requestors; i++) {
-        bytesWritten.subname(i, sys->getRequestorName(i));
+        bytesWritten.subname(i, (aggregateRequestors ? "all_requestors" : sys->getRequestorName(i)));
     }
 
     numReads
@@ -184,7 +187,7 @@ AbstractMemory::MemStats::regStats()
         .flags(total | nozero | nonan)
         ;
     for (int i = 0; i < max_requestors; i++) {
-        numReads.subname(i, sys->getRequestorName(i));
+        numReads.subname(i, (aggregateRequestors ? "all_requestors" : sys->getRequestorName(i)));
     }
 
     numWrites
@@ -192,7 +195,7 @@ AbstractMemory::MemStats::regStats()
         .flags(total | nozero | nonan)
         ;
     for (int i = 0; i < max_requestors; i++) {
-        numWrites.subname(i, sys->getRequestorName(i));
+        numWrites.subname(i, (aggregateRequestors ? "all_requestors" : sys->getRequestorName(i)));
     }
 
     numOther
@@ -200,7 +203,7 @@ AbstractMemory::MemStats::regStats()
         .flags(total | nozero | nonan)
         ;
     for (int i = 0; i < max_requestors; i++) {
-        numOther.subname(i, sys->getRequestorName(i));
+        numOther.subname(i, (aggregateRequestors ? "all_requestors" : sys->getRequestorName(i)));
     }
 
     bwRead
@@ -209,7 +212,7 @@ AbstractMemory::MemStats::regStats()
         .flags(total | nozero | nonan)
         ;
     for (int i = 0; i < max_requestors; i++) {
-        bwRead.subname(i, sys->getRequestorName(i));
+        bwRead.subname(i, (aggregateRequestors ? "all_requestors" : sys->getRequestorName(i)));
     }
 
     bwInstRead
@@ -218,7 +221,7 @@ AbstractMemory::MemStats::regStats()
         .flags(total | nozero | nonan)
         ;
     for (int i = 0; i < max_requestors; i++) {
-        bwInstRead.subname(i, sys->getRequestorName(i));
+        bwInstRead.subname(i, (aggregateRequestors ? "all_requestors" : sys->getRequestorName(i)));
     }
 
     bwWrite
@@ -227,7 +230,7 @@ AbstractMemory::MemStats::regStats()
         .flags(total | nozero | nonan)
         ;
     for (int i = 0; i < max_requestors; i++) {
-        bwWrite.subname(i, sys->getRequestorName(i));
+        bwWrite.subname(i, (aggregateRequestors ? "all_requestors" : sys->getRequestorName(i)));
     }
 
     bwTotal
@@ -236,7 +239,7 @@ AbstractMemory::MemStats::regStats()
         .flags(total | nozero | nonan)
         ;
     for (int i = 0; i < max_requestors; i++) {
-        bwTotal.subname(i, sys->getRequestorName(i));
+        bwTotal.subname(i, (aggregateRequestors ? "all_requestors" : sys->getRequestorName(i)));
     }
 
     bwRead = bytesRead / simSeconds;
@@ -432,7 +435,7 @@ AbstractMemory::access(PacketPtr pkt)
 
             assert(!pkt->req->isInstFetch());
             TRACE_PACKET("Read/Write");
-            stats.numOther[pkt->req->requestorId()]++;
+            stats.numOther[stats.requestorIndex(pkt->req->requestorId())]++;
         }
     } else if (pkt->isRead()) {
         assert(!pkt->isWrite());
@@ -446,10 +449,10 @@ AbstractMemory::access(PacketPtr pkt)
             pkt->setData(host_addr);
         }
         TRACE_PACKET(pkt->req->isInstFetch() ? "IFetch" : "Read");
-        stats.numReads[pkt->req->requestorId()]++;
-        stats.bytesRead[pkt->req->requestorId()] += pkt->getSize();
+        stats.numReads[stats.requestorIndex(pkt->req->requestorId())]++;
+        stats.bytesRead[stats.requestorIndex(pkt->req->requestorId())] += pkt->getSize();
         if (pkt->req->isInstFetch())
-            stats.bytesInstRead[pkt->req->requestorId()] += pkt->getSize();
+            stats.bytesInstRead[stats.requestorIndex(pkt->req->requestorId())] += pkt->getSize();
     } else if (pkt->isInvalidate() || pkt->isClean()) {
         assert(!pkt->isWrite());
         // in a fastmem system invalidating and/or cleaning packets
@@ -465,8 +468,8 @@ AbstractMemory::access(PacketPtr pkt)
             }
             assert(!pkt->req->isInstFetch());
             TRACE_PACKET("Write");
-            stats.numWrites[pkt->req->requestorId()]++;
-            stats.bytesWritten[pkt->req->requestorId()] += pkt->getSize();
+            stats.numWrites[stats.requestorIndex(pkt->req->requestorId())]++;
+            stats.bytesWritten[stats.requestorIndex(pkt->req->requestorId())] += pkt->getSize();
         }
     } else {
         panic("Unexpected packet %s", pkt->print());
