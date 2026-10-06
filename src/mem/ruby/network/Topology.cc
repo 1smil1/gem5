@@ -69,6 +69,60 @@ topologyInitProgress(const std::string &stage)
     std::cout << "OMELET_INIT topology " << stage
               << "; elapsed_s=" << elapsed << std::endl;
 }
+
+// WeightMatrix / DistMatrix / DistVector helpers. Defined here so the
+// Topology.cc body stays the single source of truth for the Dijkstra path.
+void
+WeightMatrix::init(int num_vnets, int num_switches)
+{
+    n = num_switches;
+    vnets = num_vnets;
+    adj.assign(num_vnets,
+               std::vector<std::vector<std::pair<int, int>>>(num_switches));
+}
+
+void
+WeightMatrix::set(int vnet, int src, int dst, int weight)
+{
+    assert(vnet >= 0 && vnet < vnets);
+    assert(src >= 0 && src < n);
+    assert(dst >= 0 && dst < n);
+    auto &row = adj[vnet][src];
+    for (auto &entry : row) {
+        if (entry.first == dst) {
+            entry.second = weight;
+            return;
+        }
+    }
+    row.emplace_back(dst, weight);
+}
+
+int
+WeightMatrix::get(int vnet, int src, int dst) const
+{
+    // Caller contract: only invoked for pairs where the caller already
+    // knows an edge exists (link_is_shortest_path_to_node), so a linear
+    // scan and the INFINITE_LATENCY fallback are safe.
+    assert(vnet >= 0 && vnet < vnets);
+    assert(src >= 0 && src < n);
+    assert(dst >= 0 && dst < n);
+    const auto &row = adj[vnet][src];
+    for (const auto &entry : row) {
+        if (entry.first == dst) return entry.second;
+    }
+    return INFINITE_LATENCY;
+}
+
+void
+DistMatrix::init(int num_vnets, int num_switches)
+{
+    n = num_switches;
+    vnets = num_vnets;
+    rows.assign(num_vnets,
+                std::vector<DistVector>(num_switches,
+                                        DistVector(num_switches,
+                                                   INFINITE_LATENCY)));
+}
 } // anonymous namespace
 
 const int INFINITE_LATENCY = 10000; // Yes, this is a big hack
@@ -167,16 +221,15 @@ Topology::createLinks(Network *net)
 
     // Initialize weight, latency, and inter switched vectors
     int num_switches = max_switch_id+1;
-    const double matrix_gib = static_cast<double>(m_vnets) * num_switches *
-        num_switches * sizeof(int) / (1024.0 * 1024 * 1024);
-    topologyInitProgress("allocating weights matrix; switches=" +
-        std::to_string(num_switches) + " vnets=" + std::to_string(m_vnets) +
-        " integer_payload_GiB_per_matrix=" + std::to_string(matrix_gib) +
-        "; weights/latencies/inter-switches are three matrices; row overhead excluded");
-    Matrix topology_weights(m_vnets,
-            std::vector<std::vector<int>>(num_switches,
-            std::vector<int>(num_switches, INFINITE_LATENCY)));
-    topologyInitProgress("weights allocated; allocating latency matrix");
+    // Sparse CSR: only edges with finite positive weight are stored.
+    // Memory is O(num_links * vnets) rather than O(num_switches^2 * vnets).
+    // For typical mesh degree ~6 and num_switches = 277182, this drops the
+    // weights allocation from ~858 GiB/int-matrix to a few hundred MB.
+    topologyInitProgress("allocating sparse weights matrix; switches=" +
+        std::to_string(num_switches) + " vnets=" + std::to_string(m_vnets));
+    WeightMatrix topology_weights;
+    topology_weights.init(m_vnets, num_switches);
+    topologyInitProgress("weights allocated (sparse); allocating latency matrix");
     Matrix component_latencies(num_switches,
             std::vector<std::vector<int>>(num_switches,
             std::vector<int>(m_vnets, -1)));
@@ -185,11 +238,11 @@ Topology::createLinks(Network *net)
             std::vector<std::vector<int>>(num_switches,
             std::vector<int>(m_vnets, 0)));
 
-    topologyInitProgress("three matrices allocated; initializing weights");
+    topologyInitProgress("matrices allocated; initializing identity weights");
     // Set identity weights to zero
-    for (int i = 0; i < topology_weights[0].size(); i++) {
+    for (int i = 0; i < num_switches; i++) {
         for (int v = 0; v < m_vnets; v++) {
-            topology_weights[v][i][i] = 0;
+            topology_weights.set(v, i, i, 0);
         }
     }
 
@@ -212,7 +265,7 @@ Topology::createLinks(Network *net)
                     " and destination cannot support same vnets");
 
                     component_latencies[src][dst][v] = link->m_latency;
-                    topology_weights[v][src][dst] = link->m_weight;
+                    topology_weights.set(v, src, dst, link->m_weight);
                     vnet_done[v] = true;
                 }
             } else {
@@ -226,7 +279,7 @@ Topology::createLinks(Network *net)
                     " and destination cannot support same vnets");
 
                     component_latencies[src][dst][vnet] = link->m_latency;
-                    topology_weights[vnet][src][dst] = link->m_weight;
+                    topology_weights.set(vnet, src, dst, link->m_weight);
                     vnet_done[vnet] = true;
                 }
             }
@@ -235,36 +288,46 @@ Topology::createLinks(Network *net)
 
     // Walk topology and hookup the links
     topologyInitProgress("weights populated; shortest paths started");
-    Matrix dist = shortest_path(topology_weights, component_latencies,
-                                component_inter_switches);
+    DistMatrix dist = shortest_path(topology_weights, component_latencies,
+                                    component_inter_switches);
 
-    for (int i = 0; i < topology_weights[0].size(); i++) {
-        if (i % 1024 == 0)
-            topologyInitProgress("installing link routes; source rows processed=" +
-                std::to_string(i) + "/" + std::to_string(num_switches));
-        for (int j = 0; j < topology_weights[0][i].size(); j++) {
-            std::vector<NetDest> routingMap;
-            routingMap.resize(m_vnets);
+    // Iterate m_link_map directly instead of scanning all (i, j) pairs:
+    // every real link has already been registered in m_link_map during
+    // Topology::addLink, and the makeLink() payload only ever runs for
+    // those pairs. std::map is sorted by (src, dst), so the visit order
+    // is deterministic and matches the pre-change iteration order
+    // (src ascending, then dst ascending within each src).
+    int link_index = 0;
+    const int total_links = static_cast<int>(m_link_map.size());
+    for (auto link_group : m_link_map) {
+        if (link_index % 1024 == 0)
+            topologyInitProgress("installing link routes; link groups processed=" +
+                std::to_string(link_index) + "/" + std::to_string(total_links));
+        ++link_index;
+        const int i = link_group.first.first;
+        const int j = link_group.first.second;
+        std::vector<NetDest> routingMap;
+        routingMap.resize(m_vnets);
 
-            // Not all sources and destinations are connected
-            // by direct links. We only construct the links
-            // which have been configured in topology.
-            bool realLink = false;
+        // Only vnets that have a positive finite weight on this direct
+        // link get a NetDest entry. vnet_done has already enforced the
+        // one-vnet-per-link invariant in the weight-population pass, so
+        // each vnet maps to at most one link entry here.
+        bool realLink = false;
 
-            for (int v = 0; v < m_vnets; v++) {
-                int weight = topology_weights[v][i][j];
-                if (weight > 0 && weight != INFINITE_LATENCY) {
-                    realLink = true;
-                    routingMap[v] =
-                        shortest_path_to_node(i, j, topology_weights, dist, v);
-                }
+        for (int v = 0; v < m_vnets; v++) {
+            int weight = topology_weights.get(v, i, j);
+            if (weight > 0 && weight != INFINITE_LATENCY) {
+                realLink = true;
+                routingMap[v] =
+                    shortest_path_to_node(i, j, topology_weights, dist, v);
             }
-            // Make one link for each set of vnets between
-            // a given source and destination. We do not
-            // want to create one link for each vnet.
-            if (realLink) {
-                makeLink(net, i, j, routingMap);
-            }
+        }
+        // Make one link for each set of vnets between
+        // a given source and destination. We do not
+        // want to create one link for each vnet.
+        if (realLink) {
+            makeLink(net, i, j, routingMap);
         }
     }
     topologyInitProgress("createLinks completed");
@@ -446,35 +509,17 @@ Topology::extend_shortest_path(Matrix &current_dist, Matrix &latencies,
     }
 }
 
-Matrix
-Topology::shortest_path(const Matrix &weights, Matrix &latencies,
+DistMatrix
+Topology::shortest_path(const WeightMatrix &weights, Matrix &latencies,
                         Matrix &inter_switches)
 {
     // The route table only consumes minimum link weights. Each source row is
     // independent, so sparse shortest-path searches can run concurrently.
     (void)latencies;
     (void)inter_switches;
-    topologyInitProgress("allocating distance matrix by copying weights");
-    Matrix dist = weights;
-    topologyInitProgress("distance matrix allocated; building adjacency lists");
-    const int nodes = weights[0].size();
-    using Edge = std::pair<int, int>;
-    std::vector<std::vector<std::vector<Edge>>> edges(
-        m_vnets, std::vector<std::vector<Edge>>(nodes));
-    for (int vnet = 0; vnet < m_vnets; ++vnet) {
-        for (int src = 0; src < nodes; ++src) {
-            if (src % 1024 == 0)
-                topologyInitProgress("adjacency vnet=" + std::to_string(vnet) +
-                    " source rows processed=" + std::to_string(src) + "/" +
-                    std::to_string(nodes));
-            for (int dst = 0; dst < nodes; ++dst) {
-                const int weight = weights[vnet][src][dst];
-                if (src != dst && weight > 0 && weight < INFINITE_LATENCY) {
-                    edges[vnet][src].emplace_back(dst, weight);
-                }
-            }
-        }
-    }
+    topologyInitProgress("shortest_path start; using sparse WeightMatrix");
+    const int nodes = weights.n;
+    const int vnets = weights.vnets;
 
     unsigned workers = std::thread::hardware_concurrency();
     if (workers == 0) {
@@ -489,20 +534,28 @@ Topology::shortest_path(const Matrix &weights, Matrix &latencies,
                  "OMELET_ROUTE_THREADS must be a positive integer");
         workers = requested;
     }
-    const int jobs = m_vnets * nodes;
+    const int jobs = vnets * nodes;
     workers = std::min(workers, static_cast<unsigned>(jobs));
     inform("Omelet routing table: %u host threads for %d source rows",
            workers, jobs);
     std::atomic<int> next_job{0};
     std::atomic<int> completed_jobs{0};
     const bool report_init_progress = std::getenv("OMELET_INIT_PROGRESS");
+
+    // Per (vnet, src) DistVector allocated once and filled in by the worker
+    // assigned to that source row. Total memory is O(vnets * num_switches).
+    topologyInitProgress("allocating per-source distance rows; total=" +
+                         std::to_string(jobs));
+    DistMatrix dist;
+    dist.init(vnets, nodes);
+
+    using Edge = std::pair<int, int>;
     const auto work = [&]() {
         for (int job = next_job.fetch_add(1); job < jobs;
              job = next_job.fetch_add(1)) {
             const int vnet = job / nodes;
             const int src = job % nodes;
-            auto &row = dist[vnet][src];
-            std::fill(row.begin(), row.end(), INFINITE_LATENCY);
+            DistVector row(nodes, INFINITE_LATENCY);
             row[src] = 0;
             std::priority_queue<Edge, std::vector<Edge>, std::greater<Edge>> pending;
             pending.emplace(0, src);
@@ -512,7 +565,7 @@ Topology::shortest_path(const Matrix &weights, Matrix &latencies,
                 if (distance != row[node]) {
                     continue;
                 }
-                for (const auto &[dst, weight] : edges[vnet][node]) {
+                for (const auto &[dst, weight] : weights.adj[vnet][node]) {
                     const int candidate = distance + weight;
                     if (candidate < row[dst]) {
                         row[dst] = candidate;
@@ -520,6 +573,7 @@ Topology::shortest_path(const Matrix &weights, Matrix &latencies,
                     }
                 }
             }
+            dist(vnet, src) = std::move(row);
             if (report_init_progress) {
                 const int done = completed_jobs.fetch_add(1) + 1;
                 if (done % 1024 == 0 || done == jobs)
@@ -528,7 +582,7 @@ Topology::shortest_path(const Matrix &weights, Matrix &latencies,
             }
         }
     };
-    topologyInitProgress("adjacency lists ready; parallel shortest paths started; rows=" +
+    topologyInitProgress("parallel shortest paths started; rows=" +
                          std::to_string(jobs));
     std::vector<std::future<void>> tasks;
     tasks.reserve(workers > 0 ? workers - 1 : 0);
@@ -545,17 +599,18 @@ Topology::shortest_path(const Matrix &weights, Matrix &latencies,
 
 bool
 Topology::link_is_shortest_path_to_node(SwitchID src, SwitchID next,
-                                        SwitchID final, const Matrix &weights,
-                                        const Matrix &dist, int vnet)
+                                        SwitchID final,
+                                        const WeightMatrix &weights,
+                                        const DistMatrix &dist, int vnet)
 {
-    return weights[vnet][src][next] + dist[vnet][next][final] ==
-        dist[vnet][src][final];
+    return weights.get(vnet, src, next) + dist(vnet, next)[final] ==
+        dist(vnet, src)[final];
 }
 
 NetDest
 Topology::shortest_path_to_node(SwitchID src, SwitchID next,
-                                const Matrix &weights, const Matrix &dist,
-                                int vnet)
+                                const WeightMatrix &weights,
+                                const DistMatrix &dist, int vnet)
 {
     NetDest result;
     int d = 0;

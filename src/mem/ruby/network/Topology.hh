@@ -41,7 +41,9 @@
 #ifndef __MEM_RUBY_NETWORK_TOPOLOGY_HH__
 #define __MEM_RUBY_NETWORK_TOPOLOGY_HH__
 
+#include <cstddef>
 #include <iostream>
+#include <utility>
 #include <vector>
 
 #include "mem/ruby/common/TypeDefines.hh"
@@ -57,13 +59,63 @@ namespace ruby
 class NetDest;
 class Network;
 
-/*
- * We use a three-dimensional vector matrix for calculating
- * the shortest paths for each pair of source and destination
- * and for each type of virtual network. The three dimensions
- * represent the source ID, destination ID, and vnet number.
- */
+// Dense 3D int matrix. Used by the legacy Floyd-Warshall implementation
+// (extend_shortest_path). The active Dijkstra path in shortest_path() does
+// not allocate this storage. Kept for API compatibility and to avoid
+// silently changing route results.
 typedef std::vector<std::vector<std::vector<int>>> Matrix;
+
+// Sparse CSR-style weight matrix: per (vnet, src) list of (dst, weight).
+// Only edges with finite positive weight are stored; absent entries
+// default to INFINITE_LATENCY (defined in Topology.cc). Hot path
+// (Dijkstra) walks adj[vnet][src] directly without a dense lookup.
+// Equivalence with the prior dense Matrix: when there is a direct link,
+// adj[vnet][src] contains (dst, weight); the absence of an entry means
+// the same INFINITE_LATENCY as before. Dijkstra relax rules unchanged.
+struct WeightMatrix
+{
+    int n = 0;       // num_switches
+    int vnets = 0;   // num virtual networks
+    // adj[vnet][src] = vector of (dst, weight) pairs.
+    std::vector<std::vector<std::vector<std::pair<int, int>>>> adj;
+
+    void init(int num_vnets, int num_switches);
+    // Insert or overwrite the weight for (vnet, src, dst). No vnet_done
+    // tracking here; the caller in createLinks already enforces the
+    // uniqueness constraint for links between the same source-destination
+    // pair.
+    void set(int vnet, int src, int dst, int weight);
+    // Linear scan over adj[vnet][src]; small (mesh-degree) in practice.
+    int get(int vnet, int src, int dst) const;
+};
+
+// Per-source distance row, length num_switches. Allocated once per
+// Dijkstra worker, never copied across sources.
+struct DistVector
+{
+    int n = 0;
+    std::vector<int> d;
+
+    DistVector() = default;
+    explicit DistVector(int n_, int fill) : n(n_), d(n_, fill) {}
+
+    int &operator[](int i) { return d[i]; }
+    int operator[](int i) const { return d[i]; }
+};
+
+// Per-(vnet, src) distance storage returned by shortest_path(). Total
+// memory is O(vnets * num_switches) ints, not O(vnets * num_switches^2).
+struct DistMatrix
+{
+    int n = 0;
+    int vnets = 0;
+    std::vector<std::vector<DistVector>> rows;
+
+    void init(int num_vnets, int num_switches);
+    DistVector &operator()(int vnet, int src) { return rows[vnet][src]; }
+    const DistVector &operator()(int vnet, int src) const
+    { return rows[vnet][src]; }
+};
 
 struct LinkEntry
 {
@@ -94,19 +146,21 @@ class Topology
                   std::vector<NetDest>& routing_table_entry);
 
     // Helper functions based on chapter 29 of Cormen et al.
+    // Deprecated: the active routing path is shortest_path() (Dijkstra).
+    // Kept declared/defined to preserve API; not invoked in the hot path.
     void extend_shortest_path(Matrix &current_dist, Matrix &latencies,
                               Matrix &inter_switches);
 
-    Matrix shortest_path(const Matrix &weights,
+    DistMatrix shortest_path(const WeightMatrix &weights,
             Matrix &latencies, Matrix &inter_switches);
 
     bool link_is_shortest_path_to_node(SwitchID src, SwitchID next,
-            SwitchID final, const Matrix &weights, const Matrix &dist,
-            int vnet);
+            SwitchID final, const WeightMatrix &weights,
+            const DistMatrix &dist, int vnet);
 
     NetDest shortest_path_to_node(SwitchID src, SwitchID next,
-                                  const Matrix &weights, const Matrix &dist,
-                                  int vnet);
+                                  const WeightMatrix &weights,
+                                  const DistMatrix &dist, int vnet);
 
     const uint32_t m_nodes;
     const uint32_t m_number_of_switches;

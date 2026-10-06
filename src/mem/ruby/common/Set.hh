@@ -28,13 +28,20 @@
 
 // modified by Dan Gibson on 05/20/05 to accomidate FASTER
 // >32 set lengths, using an array of ints w/ 32 bits/int
+//
+// Modified 2026-10-06: replaced compile-time `std::bitset<NUMBER_BITS_PER_SET>`
+// with a runtime-sized `RubyDynamicBitset` (vector<uint64_t>). NetDest::resize
+// can now pass MachineType_base_count values (e.g. 54752) without recompiling
+// the binary. NUMBER_BITS_PER_SET is no longer referenced.
 
 #ifndef __MEM_RUBY_COMMON_SET_HH__
 #define __MEM_RUBY_COMMON_SET_HH__
 
-#include <bitset>
 #include <cassert>
+#include <cstddef>
+#include <cstdint>
 #include <iostream>
+#include <vector>
 
 #include "base/logging.hh"
 #include "mem/ruby/common/TypeDefines.hh"
@@ -45,24 +52,213 @@ namespace gem5
 namespace ruby
 {
 
+// Minimal runtime-sized bitset used by Set. API mirrors the subset of
+// std::bitset / boost::dynamic_bitset that Set needs; missing members fail at
+// compile time on the caller, which is intentional so no behaviour drift
+// creeps in via silent extension.
+class RubyDynamicBitset
+{
+  public:
+    RubyDynamicBitset() : m_size(0) {}
+
+    explicit RubyDynamicBitset(std::size_t nbits) : m_size(nbits)
+    {
+        m_words.resize(wordsFor(nbits), 0);
+    }
+
+    std::size_t size() const { return m_size; }
+
+    bool test(std::size_t pos) const
+    {
+        checkBounds(pos);
+        return (m_words[wordIdx(pos)] >> bitIdx(pos)) & 1ULL;
+    }
+
+    // std::bitset-compatible proxy: `bits[i]` returns the bit at i.
+    // Returns a proxy so write-syntax keeps working; reads return bool.
+    class Proxy
+    {
+      public:
+        Proxy(RubyDynamicBitset &bs, std::size_t pos)
+            : m_bs(bs), m_pos(pos) {}
+        Proxy &operator=(bool v)
+        {
+            m_bs.set(m_pos, v);
+            return *this;
+        }
+        Proxy &operator=(const Proxy &other)
+        {
+            m_bs.set(m_pos, (bool)other);
+            return *this;
+        }
+        operator bool() const { return m_bs.test(m_pos); }
+
+      private:
+        RubyDynamicBitset &m_bs;
+        std::size_t m_pos;
+    };
+    Proxy operator[](std::size_t pos)
+    {
+        checkBounds(pos);
+        return Proxy(*this, pos);
+    }
+    bool operator[](std::size_t pos) const
+    {
+        checkBounds(pos);
+        return test(pos);
+    }
+
+    void set(std::size_t pos, bool value = true)
+    {
+        checkBounds(pos);
+        std::uint64_t mask = 1ULL << bitIdx(pos);
+        if (value)
+            m_words[wordIdx(pos)] |= mask;
+        else
+            m_words[wordIdx(pos)] &= ~mask;
+    }
+
+    void set()
+    {
+        for (auto &w : m_words) w = ~0ULL;
+    }
+
+    void reset()
+    {
+        for (auto &w : m_words) w = 0ULL;
+    }
+
+    void reset(std::size_t pos)
+    {
+        checkBounds(pos);
+        m_words[wordIdx(pos)] &= ~(1ULL << bitIdx(pos));
+    }
+
+    bool none() const
+    {
+        for (auto w : m_words) if (w) return false;
+        return true;
+    }
+
+    std::size_t count() const
+    {
+        std::size_t total = 0;
+        for (auto w : m_words) total += popcount(w);
+        return total;
+    }
+
+    bool operator==(const RubyDynamicBitset &other) const
+    {
+        return m_size == other.m_size && m_words == other.m_words;
+    }
+    bool operator!=(const RubyDynamicBitset &other) const
+    {
+        return !(*this == other);
+    }
+
+    RubyDynamicBitset operator|(const RubyDynamicBitset &other) const
+    {
+        assert(m_size == other.m_size);
+        RubyDynamicBitset r(m_size);
+        for (std::size_t i = 0; i < m_words.size(); ++i)
+            r.m_words[i] = m_words[i] | other.m_words[i];
+        return r;
+    }
+
+    RubyDynamicBitset operator&(const RubyDynamicBitset &other) const
+    {
+        assert(m_size == other.m_size);
+        RubyDynamicBitset r(m_size);
+        for (std::size_t i = 0; i < m_words.size(); ++i)
+            r.m_words[i] = m_words[i] & other.m_words[i];
+        return r;
+    }
+
+    RubyDynamicBitset operator~() const
+    {
+        RubyDynamicBitset r(m_size);
+        for (std::size_t i = 0; i < m_words.size(); ++i)
+            r.m_words[i] = ~m_words[i];
+        return r;
+    }
+
+    RubyDynamicBitset &operator|=(const RubyDynamicBitset &other)
+    {
+        assert(m_size == other.m_size);
+        for (std::size_t i = 0; i < m_words.size(); ++i)
+            m_words[i] |= other.m_words[i];
+        return *this;
+    }
+
+    RubyDynamicBitset &operator&=(const RubyDynamicBitset &other)
+    {
+        assert(m_size == other.m_size);
+        for (std::size_t i = 0; i < m_words.size(); ++i)
+            m_words[i] &= other.m_words[i];
+        return *this;
+    }
+
+    void resize(std::size_t nbits)
+    {
+        m_size = nbits;
+        m_words.assign(wordsFor(nbits), 0);
+    }
+
+    friend std::ostream &operator<<(std::ostream &out,
+                                    const RubyDynamicBitset &bs)
+    {
+        out << '[';
+        for (std::size_t i = 0; i < bs.m_size; ++i) {
+            if (i) out << ' ';
+            out << (bs.test(i) ? '1' : '0');
+        }
+        out << ']';
+        return out;
+    }
+
+  private:
+    static constexpr std::size_t kBitsPerWord = 64;
+
+    static std::size_t wordsFor(std::size_t nbits)
+    {
+        return (nbits + kBitsPerWord - 1) / kBitsPerWord;
+    }
+
+    static std::size_t wordIdx(std::size_t pos) { return pos / kBitsPerWord; }
+    static std::size_t bitIdx(std::size_t pos) { return pos % kBitsPerWord; }
+
+    void checkBounds(std::size_t pos) const
+    {
+        assert(pos < m_size);
+    }
+
+    static std::size_t popcount(std::uint64_t w)
+    {
+        // No <bit> header dependency; use compiler builtin when available.
+#if defined(__GNUC__) || defined(__clang__)
+        return static_cast<std::size_t>(__builtin_popcountll(w));
+#else
+        std::size_t c = 0;
+        while (w) { c += w & 1ULL; w >>= 1; }
+        return c;
+#endif
+    }
+
+    std::size_t m_size;
+    std::vector<std::uint64_t> m_words;
+};
+
 class Set
 {
   private:
     // Number of bits in use in this set.
-    // can be defined in build_opts file (default=64).
     int m_nSize;
-    std::bitset<NUMBER_BITS_PER_SET> bits;
+    RubyDynamicBitset bits;
 
   public:
     Set() : m_nSize(0) {}
 
-    Set(int size) : m_nSize(size)
-    {
-        if (size > NUMBER_BITS_PER_SET)
-            fatal("Number of bits(%d) < size specified(%d). "
-                  "Increase the number of bits and recompile.\n",
-                  NUMBER_BITS_PER_SET, size);
-    }
+    Set(int size) : m_nSize(size), bits(static_cast<std::size_t>(size)) {}
 
     Set(const Set& obj) : m_nSize(obj.m_nSize), bits(obj.bits) {}
     ~Set() {}
@@ -117,16 +313,14 @@ class Set
      */
     void broadcast()
     {
+        bits.resize(static_cast<std::size_t>(m_nSize));
         bits.set();
-        for (int j = m_nSize; j < NUMBER_BITS_PER_SET; ++j) {
-            bits.reset(j);
-        }
     }
 
     /*
      * This function returns the population count of 1's in the set
      */
-    int count() const { return bits.count(); }
+    int count() const { return static_cast<int>(bits.count()); }
 
     /*
      * This function checks for set equality
@@ -162,7 +356,7 @@ class Set
     bool
     intersectionIsEmpty(const Set& obj) const
     {
-        std::bitset<NUMBER_BITS_PER_SET> r = bits & obj.bits;
+        RubyDynamicBitset r = bits & obj.bits;
         return r.none();
     }
 
@@ -174,7 +368,7 @@ class Set
     isSuperset(const Set& test) const
     {
         assert(m_nSize == test.m_nSize);
-        std::bitset<NUMBER_BITS_PER_SET> r = bits | test.bits;
+        RubyDynamicBitset r = bits | test.bits;
         return (r == bits);
     }
 
@@ -188,7 +382,7 @@ class Set
     bool
     isBroadcast() const
     {
-        return (bits.count() == m_nSize);
+        return (bits.count() == static_cast<std::size_t>(m_nSize));
     }
 
     bool isEmpty() const { return bits.none(); }
@@ -210,12 +404,8 @@ class Set
     void
     setSize(int size)
     {
-        if (size > NUMBER_BITS_PER_SET)
-            fatal("Number of bits(%d) < size specified(%d). "
-                  "Increase the number of bits and recompile.\n",
-                  NUMBER_BITS_PER_SET, size);
         m_nSize = size;
-        bits.reset();
+        bits.resize(static_cast<std::size_t>(size));
     }
 
     void print(std::ostream& out) const
