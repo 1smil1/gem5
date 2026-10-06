@@ -64,6 +64,7 @@ class mesh_nox(SimpleTopology):
                 shape = self.nonuniform_grid["chiplets"][str(chiplet_i)]["grid"]
                 cfg["mesh_rows"] = int(shape[1])
             self.noc_cfg.append(cfg)
+        progress(f"per-chiplet NoC configuration {num_chiplets}/{num_chiplets} completed")
 
         noc_routers_per_chiplet_list = self.sys_cfg["noc_routers_per_chiplet"]
         assert len(noc_routers_per_chiplet_list) == num_chiplets
@@ -121,6 +122,7 @@ class mesh_nox(SimpleTopology):
                 link_cnt += 1
                 router_id += 1
 
+        progress(f"NoC routers and endpoint links {num_chiplets}/{num_chiplets} completed")
         noi_routers = []
         router_map["interposer"] = []
         noi_rtr_width = noi_router_width(opts, self.link_lib, self.sys_cfg, self.plc_cfg)
@@ -128,6 +130,8 @@ class mesh_nox(SimpleTopology):
             voltage_domain=VoltageDomain(voltage=self.sys_cfg["sys_voltage"]))
 
         for i in range(self.noi_cfg["num_routers"]):
+            if i % 100 == 0:
+                progress(f"NoI routers {i}/{self.noi_cfg['num_routers']}")
             role = "interposer"
             noi_rtr_lat = self.sys_cfg["router_latency"]["interposer"]
             noi_routers.append(Router(router_id=router_id, 
@@ -140,6 +144,7 @@ class mesh_nox(SimpleTopology):
             router_map[role].append(router_id)
             router_id += 1
 
+        progress(f"NoI routers {len(noi_routers)}/{self.noi_cfg['num_routers']} completed")
         net.routers = noc_routers + noi_routers
         progress(f"routers created count={len(net.routers)}; creating intra-chiplet links")
 
@@ -158,6 +163,7 @@ class mesh_nox(SimpleTopology):
             link_cnt += num_new_links
 
 
+        progress(f"intra-chiplet links {num_chiplets}/{num_chiplets} completed")
         if self.nonuniform_grid is None:
             h_int, num_new_links = build_horizontal_inter_chiplet(
                 opts, self.link_lib, self.noi_cfg, self.sys_cfg, self.plc_cfg,
@@ -171,7 +177,7 @@ class mesh_nox(SimpleTopology):
         noc_noi_connect_int, num_new_links = connect_noi_noc(
             opts, self.link_lib, self.noc_cfg, self.noi_cfg, self.sys_cfg, self.plc_cfg, 
             net, net.routers, IntLink, nodes, link_cnt, noc_routers_per_chiplet_list, router_map,
-            self.nonuniform_grid
+            self.nonuniform_grid, progress=progress
         )
         int_links.extend(noc_noi_connect_int)
         link_cnt += num_new_links

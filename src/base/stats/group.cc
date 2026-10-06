@@ -78,8 +78,9 @@ Group::regStats()
     static unsigned long registered = 0;
     const auto register_group = [&](Group *group, const char *name) {
         const Named *named = dynamic_cast<const Named *>(group);
-        if (report && ++registered % 5000 == 0) {
+        if (report && ++registered % 10000 == 0) {
             std::cout << "OMELET_INIT statistics groups=" << registered
+                      << " total=dynamic"
                       << " next=" << (named ? named->name() : name)
                       << " type=" << typeid(*group).name() << std::endl;
         }

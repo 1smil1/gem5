@@ -64,32 +64,37 @@ MaxTick = 2**64 - 1
 _drain_manager = _m5.drain.DrainManager.instance()
 
 _instantiated = False  # Has m5.instantiate() been called?
+_instantiated_objects = None
 
 # The final call to instantiate the SimObject graph and initialize the
 # system.
 def instantiate(ckpt_dir=None):
-    global _instantiated
+    global _instantiated, _instantiated_objects
     from m5 import options
     import m5
 
     # Optional display flag set by Omelet; never a simulation input.
     progress_enabled = getattr(m5, "_omelet_init_progress", False)
     started = time.monotonic()
+    object_total = None
 
     def progress(stage):
         if progress_enabled:
             print(f"OMELET_INIT instantiate {stage}; elapsed_s={time.monotonic() - started:.1f}", flush=True)
 
     def progress_objects(iterable, stage):
+        nonlocal object_total
         if not progress_enabled:
             yield from iterable
             return
         stage_started = time.monotonic()
-        progress(f"{stage} started")
+        total = object_total
+        progress(f"{stage} started; total={total if total is not None else 'dynamic'}")
         count = 0
         for obj in iterable:
-            if count % 5000 == 0:
-                progress(f"{stage} processed={count}; next={type(obj).__name__}")
+            if count % 10000 == 0:
+                position = f"{count}/{total}" if total is not None else f"{count}; total=dynamic"
+                progress(f"{stage} processed={position}; next={type(obj).__name__}")
             is_network = type(obj).__name__ == "GarnetNetwork"
             if is_network:
                 progress(f"{stage} GarnetNetwork started")
@@ -97,7 +102,11 @@ def instantiate(ckpt_dir=None):
             count += 1
             if is_network:
                 progress(f"{stage} GarnetNetwork completed")
-        progress(f"{stage} completed objects={count}; stage_s={time.monotonic() - stage_started:.1f}")
+        if stage == "adopting object parameters":
+            # descendants() visits children after yielding their parent, so
+            # newly adopted children are included in this existing traversal.
+            object_total = count
+        progress(f"{stage} completed processed={count}/{count}; stage_s={time.monotonic() - stage_started:.1f}")
 
     if _instantiated:
         fatal("m5.instantiate() called twice.")
@@ -117,15 +126,25 @@ def instantiate(ckpt_dir=None):
     for obj in progress_objects(root.descendants(), "adopting object parameters"):
         obj.adoptOrphanParams()
 
+    # The hierarchy is stable after orphan parameters have been adopted. Keep
+    # one deterministic traversal for the remaining passes instead of walking
+    # and sorting millions of SimObjects repeatedly.
+    object_list = list(root.descendants())
+    object_total = len(object_list)
+    _instantiated_objects = object_list
+    progress(f"cached stable object list count={object_total}")
+
     # Unproxy in sorted order for determinism
-    for obj in progress_objects(root.descendants(), "resolving parameter proxies"):
+    for obj in progress_objects(object_list, "resolving parameter proxies"):
         obj.unproxyParams()
 
     if options.dump_config:
-        progress("sorting objects for config.ini started")
+        progress("writing config.ini started")
         ini_file = open(os.path.join(options.outdir, options.dump_config), "w")
-        # Print ini sections in sorted order for easier diffing
-        for obj in progress_objects(sorted(root.descendants(), key=lambda o: o.path()), "writing config.ini"):
+        # The cached hierarchy is deterministic because descendants() sorts
+        # children at every level. A global path sort creates a huge temporary
+        # list without changing the values consumed by the energy reader.
+        for obj in progress_objects(object_list, "writing config.ini"):
             obj.print_ini(ini_file)
         ini_file.close()
 
@@ -155,13 +174,13 @@ def instantiate(ckpt_dir=None):
     stats.initSimStats()
 
     # Create the C++ sim objects and connect ports
-    for obj in progress_objects(root.descendants(), "creating C++ objects"):
+    for obj in progress_objects(object_list, "creating C++ objects"):
         obj.createCCObject()
-    for obj in progress_objects(root.descendants(), "connecting ports"):
+    for obj in progress_objects(object_list, "connecting ports"):
         obj.connectPorts()
 
     # Do a second pass to finish initializing the sim objects
-    for obj in progress_objects(root.descendants(), "initializing objects and network routing"):
+    for obj in progress_objects(object_list, "initializing objects and network routing"):
         obj.init()
 
     # Do a third pass to initialize statistics
@@ -171,11 +190,11 @@ def instantiate(ckpt_dir=None):
     progress("binding statistics hierarchy completed")
 
     # Do a fourth pass to initialize probe points
-    for obj in progress_objects(root.descendants(), "registering probe points"):
+    for obj in progress_objects(object_list, "registering probe points"):
         obj.regProbePoints()
 
     # Do a fifth pass to connect probe listeners
-    for obj in progress_objects(root.descendants(), "registering probe listeners"):
+    for obj in progress_objects(object_list, "registering probe listeners"):
         obj.regProbeListeners()
 
     # We want to generate the DVFS diagram for the system. This can only be
@@ -191,10 +210,10 @@ def instantiate(ckpt_dir=None):
     if ckpt_dir:
         _drain_manager.preCheckpointRestore()
         ckpt = _m5.core.getCheckpoint(ckpt_dir)
-        for obj in progress_objects(root.descendants(), "loading checkpoint state"):
+        for obj in progress_objects(object_list, "loading checkpoint state"):
             obj.loadState(ckpt)
     else:
-        for obj in progress_objects(root.descendants(), "initializing object state"):
+        for obj in progress_objects(object_list, "initializing object state"):
             obj.initState()
 
     # Check to see if any of the stat events are in the past after resuming from
@@ -208,14 +227,17 @@ need_startup = True
 
 def simulate(*args, **kwargs):
     global need_startup
-    global _instantiated
+    global _instantiated, _instantiated_objects
 
     if not _instantiated:
         fatal("m5.instantiate() must be called before m5.simulate().")
 
     if need_startup:
         root = objects.Root.getInstance()
-        for obj in root.descendants():
+        startup_objects = _instantiated_objects
+        if startup_objects is None:
+            startup_objects = root.descendants()
+        for obj in startup_objects:
             obj.startup()
         need_startup = False
 

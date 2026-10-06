@@ -90,7 +90,9 @@ struct WeightMatrix
 };
 
 // Per-source distance row, length num_switches. Workers move completed
-// rows into DistMatrix; all source rows remain available for route marking.
+// The legacy DistMatrix type remains for compatibility with older callers, but
+// the active route builder streams one reverse-Dijkstra distance row at a time
+// and never allocates an all-pairs matrix.
 struct DistVector
 {
     int n = 0;
@@ -151,16 +153,6 @@ class Topology
     // Kept declared/defined to preserve API; not invoked in the hot path.
     void extend_shortest_path(Matrix &current_dist, Matrix &latencies,
                               Matrix &inter_switches);
-
-    DistMatrix shortest_path(const WeightMatrix &weights);
-
-    bool link_is_shortest_path_to_node(SwitchID src, SwitchID next,
-            SwitchID final, const WeightMatrix &weights,
-            const DistMatrix &dist, int vnet);
-
-    NetDest shortest_path_to_node(SwitchID src, SwitchID next,
-                                  const WeightMatrix &weights,
-                                  const DistMatrix &dist, int vnet);
 
     const uint32_t m_nodes;
     const uint32_t m_number_of_switches;

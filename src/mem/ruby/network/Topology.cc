@@ -325,68 +325,167 @@ Topology::createLinks(Network *net)
         }
         topologyRouteDigest("weights", weights_digest.h);
     }
-    DistMatrix dist = shortest_path(topology_weights);
-    RouteDigester dist_digest;
+    RouteDigester marking_digest;
+
+    // Build compact route bits while computing one destination at a time.
+    // The old implementation retained vnets * switches * switches ints.
+    // RouteBits retains only the final per-link destination sets and releases
+    // each packed entry immediately after makeLink copies it into Garnet.
+    struct RouteBits {
+        int vnets;
+        int words;
+        std::vector<uint64_t> bits;
+        RouteBits(int v, int w) : vnets(v), words(w), bits(v * w, 0) {}
+        void add(int v, int d) { bits[v * words + d / 64] |= 1ULL << (d % 64); }
+        bool test(int v, int d) const
+        { return (bits[v * words + d / 64] >> (d % 64)) & 1ULL; }
+        void clear() { std::vector<uint64_t>().swap(bits); }
+    };
+    struct RouteEdge { int src; int dst; int weight; int link; };
+
+    const int total_links = static_cast<int>(m_link_map.size());
+    const int route_words = (m_nodes + 63) / 64;
+    const uint64_t route_bytes = static_cast<uint64_t>(total_links) *
+        static_cast<uint64_t>(m_vnets) * static_cast<uint64_t>(route_words) *
+        sizeof(uint64_t);
+    topologyInitProgress("packed route storage links=" +
+        std::to_string(total_links) + " destinations=" +
+        std::to_string(m_nodes) + " bytes=" + std::to_string(route_bytes) +
+        " (~" + std::to_string(route_bytes / (1024.0 * 1024.0 * 1024.0)) +
+        " GiB)");
+    std::vector<std::pair<int, int>> link_keys;
+    link_keys.reserve(total_links);
+    for (const auto &entry : m_link_map)
+        link_keys.push_back(entry.first);
+    std::vector<RouteBits> route_bits;
+    route_bits.reserve(total_links);
+    for (int i = 0; i < total_links; ++i)
+        route_bits.emplace_back(m_vnets, route_words);
+
+    std::vector<std::vector<RouteEdge>> route_edges(m_vnets);
+    std::vector<std::vector<std::vector<std::pair<int, int>>>> reverse_adj(
+        m_vnets, std::vector<std::vector<std::pair<int, int>>>(num_switches));
+    for (int v = 0; v < m_vnets; ++v) {
+        for (int i = 0; i < total_links; ++i) {
+            const int src = link_keys[i].first;
+            const int dst = link_keys[i].second;
+            const int weight = topology_weights.get(v, src, dst);
+            if (weight > 0 && weight != INFINITE_LATENCY) {
+                route_edges[v].push_back({src, dst, weight, i});
+                reverse_adj[v][dst].push_back({src, weight});
+            }
+        }
+    }
+
+    using Edge = std::pair<int, int>;
+    // Keep the optional legacy distance digest without retaining its matrix.
+    // This is a debug-only verification pass; normal runs do not repeat it.
     if (digest_routes) {
-        for (int v = 0; v < m_vnets; v++) {
-            for (int src = 0; src < num_switches; src++) {
-                const DistVector &row = dist(v, src);
-                for (int dst = 0; dst < num_switches; dst++) {
-                    dist_digest.mixInt(row[dst]);
+        RouteDigester dist_digest;
+        for (int v = 0; v < m_vnets; ++v) {
+            for (int src = 0; src < num_switches; ++src) {
+                std::vector<int> distance(num_switches, INFINITE_LATENCY);
+                std::priority_queue<Edge, std::vector<Edge>, std::greater<Edge>> pending;
+                distance[src] = 0;
+                pending.emplace(0, src);
+                while (!pending.empty()) {
+                    const auto [cost, node] = pending.top();
+                    pending.pop();
+                    if (cost != distance[node])
+                        continue;
+                    for (const auto &[dst, weight] : topology_weights.adj[v][node]) {
+                        const int candidate = cost + weight;
+                        if (candidate < distance[dst]) {
+                            distance[dst] = candidate;
+                            pending.emplace(candidate, dst);
+                        }
+                    }
                 }
+                for (int dst = 0; dst < num_switches; ++dst)
+                    dist_digest.mixInt(distance[dst]);
             }
         }
         topologyRouteDigest("dist", dist_digest.h);
     }
-    RouteDigester marking_digest;
 
-    // Iterate m_link_map directly instead of scanning all (i, j) pairs:
-    // every real link has already been registered in m_link_map during
-    // Topology::addLink, and the makeLink() payload only ever runs for
-    // those pairs. std::map is sorted by (src, dst), so the visit order
-    // is deterministic and matches the pre-change iteration order
-    // (src ascending, then dst ascending within each src).
+    topologyInitProgress("streaming reverse shortest paths; links=" +
+        std::to_string(total_links) + " destinations=" +
+        std::to_string(m_nodes));
+    const bool report_init_progress = std::getenv("OMELET_INIT_PROGRESS");
+    for (int v = 0; v < m_vnets; ++v) {
+        for (int d = 0; d < m_nodes; ++d) {
+            const int target = m_nodes + d;
+            std::vector<int> distance(num_switches, INFINITE_LATENCY);
+            std::priority_queue<Edge, std::vector<Edge>, std::greater<Edge>> pending;
+            distance[target] = 0;
+            pending.emplace(0, target);
+            while (!pending.empty()) {
+                const auto [cost, node] = pending.top();
+                pending.pop();
+                if (cost != distance[node])
+                    continue;
+                for (const auto &[previous, weight] : reverse_adj[v][node]) {
+                    const int candidate = cost + weight;
+                    if (candidate < distance[previous]) {
+                        distance[previous] = candidate;
+                        pending.emplace(candidate, previous);
+                    }
+                }
+            }
+            for (const RouteEdge &edge : route_edges[v]) {
+                if (edge.weight + distance[edge.dst] == distance[edge.src])
+                    route_bits[edge.link].add(v, d);
+            }
+            if (report_init_progress && (d % 1024 == 0 || d + 1 == m_nodes))
+                topologyInitProgress("reverse shortest paths vnet=" +
+                    std::to_string(v + 1) + "/" + std::to_string(m_vnets) +
+                    " destinations=" + std::to_string(d + 1) + "/" +
+                    std::to_string(m_nodes));
+        }
+    }
+
     int link_index = 0;
-    const int total_links = static_cast<int>(m_link_map.size());
-    for (auto link_group : m_link_map) {
+    for (const auto &link_group : m_link_map) {
         if (link_index % 1024 == 0)
             topologyInitProgress("installing link routes; link groups processed=" +
                 std::to_string(link_index) + "/" + std::to_string(total_links));
-        ++link_index;
         const int i = link_group.first.first;
         const int j = link_group.first.second;
-        std::vector<NetDest> routingMap;
-        routingMap.resize(m_vnets);
-
-        // Only vnets that have a positive finite weight on this direct
-        // link get a NetDest entry. vnet_done has already enforced the
-        // one-vnet-per-link invariant in the weight-population pass, so
-        // each vnet maps to at most one link entry here.
+        std::vector<NetDest> routingMap(m_vnets);
         bool realLink = false;
-
-        for (int v = 0; v < m_vnets; v++) {
-            int weight = topology_weights.get(v, i, j);
+        for (int v = 0; v < m_vnets; ++v) {
+            const int weight = topology_weights.get(v, i, j);
             if (weight > 0 && weight != INFINITE_LATENCY) {
                 realLink = true;
-                routingMap[v] =
-                    shortest_path_to_node(i, j, topology_weights, dist, v);
+                for (int d = 0; d < m_nodes; ++d) {
+                    if (!route_bits[link_index].test(v, d))
+                        continue;
+                    int remaining = d;
+                    for (int type = 0; type < MachineType_NUM; ++type) {
+                        const int count = MachineType_base_count((MachineType)type);
+                        if (remaining < count) {
+                            MachineID machine = {(MachineType)type,
+                                                 static_cast<NodeID>(remaining)};
+                            routingMap[v].add(machine);
+                            break;
+                        }
+                        remaining -= count;
+                    }
+                }
                 if (digest_routes) {
                     marking_digest.mixInt(i);
                     marking_digest.mixInt(j);
                     marking_digest.mixInt(v);
-                    for (NodeID d : routingMap[v].getAllDest()) {
+                    for (NodeID d : routingMap[v].getAllDest())
                         marking_digest.mixInt(static_cast<int>(d));
-                    }
                     marking_digest.mixInt(0x40000000);
                 }
             }
         }
-        // Make one link for each set of vnets between
-        // a given source and destination. We do not
-        // want to create one link for each vnet.
-        if (realLink) {
+        if (realLink)
             makeLink(net, i, j, routingMap);
-        }
+        route_bits[link_index].clear();
+        ++link_index;
     }
     topologyRouteDigest("marking", marking_digest.h);
     topologyInitProgress("createLinks completed");
@@ -566,139 +665,6 @@ Topology::extend_shortest_path(Matrix &current_dist, Matrix &latencies,
             }
         }
     }
-}
-
-DistMatrix
-Topology::shortest_path(const WeightMatrix &weights)
-{
-    // The route table only consumes minimum link weights. Each source row is
-    // independent, so sparse shortest-path searches can run concurrently.
-    topologyInitProgress("shortest_path start; using sparse WeightMatrix");
-    const int nodes = weights.n;
-    const int vnets = weights.vnets;
-
-    unsigned workers = std::thread::hardware_concurrency();
-    if (workers == 0) {
-        workers = 1;
-    }
-    if (const char *configured = std::getenv("OMELET_ROUTE_THREADS")) {
-        char *end = nullptr;
-        errno = 0;
-        const unsigned long requested = std::strtoul(configured, &end, 10);
-        fatal_if(errno != 0 || end == configured || *end != '\0' ||
-                 requested == 0 || requested > UINT_MAX,
-                 "OMELET_ROUTE_THREADS must be a positive integer");
-        workers = requested;
-    }
-    const int jobs = vnets * nodes;
-    workers = std::min(workers, static_cast<unsigned>(jobs));
-    inform("Omelet routing table: %u host threads for %d source rows",
-           workers, jobs);
-    std::atomic<int> next_job{0};
-    std::atomic<int> completed_jobs{0};
-    const bool report_init_progress = std::getenv("OMELET_INIT_PROGRESS");
-
-    // Per (vnet, src) DistVector allocated once and filled in by the worker
-    // assigned to that source row. Retained memory is O(vnets * num_switches^2).
-    topologyInitProgress("allocating per-source distance rows; total=" +
-                         std::to_string(jobs));
-    DistMatrix dist;
-    dist.init(vnets, nodes);
-
-    using Edge = std::pair<int, int>;
-    const auto work = [&]() {
-        for (int job = next_job.fetch_add(1); job < jobs;
-             job = next_job.fetch_add(1)) {
-            const int vnet = job / nodes;
-            const int src = job % nodes;
-            DistVector row(nodes, INFINITE_LATENCY);
-            row[src] = 0;
-            std::priority_queue<Edge, std::vector<Edge>, std::greater<Edge>> pending;
-            pending.emplace(0, src);
-            while (!pending.empty()) {
-                const auto [distance, node] = pending.top();
-                pending.pop();
-                if (distance != row[node]) {
-                    continue;
-                }
-                for (const auto &[dst, weight] : weights.adj[vnet][node]) {
-                    const int candidate = distance + weight;
-                    if (candidate < row[dst]) {
-                        row[dst] = candidate;
-                        pending.emplace(candidate, dst);
-                    }
-                }
-            }
-            dist(vnet, src) = std::move(row);
-            if (report_init_progress) {
-                const int done = completed_jobs.fetch_add(1) + 1;
-                if (done % 1024 == 0 || done == jobs)
-                    topologyInitProgress("shortest paths completed rows=" +
-                        std::to_string(done) + "/" + std::to_string(jobs));
-            }
-        }
-    };
-    topologyInitProgress("parallel shortest paths started; rows=" +
-                         std::to_string(jobs));
-    std::vector<std::future<void>> tasks;
-    tasks.reserve(workers > 0 ? workers - 1 : 0);
-    for (unsigned worker = 1; worker < workers; ++worker) {
-        tasks.emplace_back(std::async(std::launch::async, work));
-    }
-    work();
-    for (auto &task : tasks) {
-        task.get();
-    }
-    topologyInitProgress("shortest paths completed; source rows=" + std::to_string(jobs));
-    return dist;
-}
-
-bool
-Topology::link_is_shortest_path_to_node(SwitchID src, SwitchID next,
-                                        SwitchID final,
-                                        const WeightMatrix &weights,
-                                        const DistMatrix &dist, int vnet)
-{
-    return weights.get(vnet, src, next) + dist(vnet, next)[final] ==
-        dist(vnet, src)[final];
-}
-
-NetDest
-Topology::shortest_path_to_node(SwitchID src, SwitchID next,
-                                const WeightMatrix &weights,
-                                const DistMatrix &dist, int vnet)
-{
-    NetDest result;
-    int d = 0;
-    int machines;
-    int max_machines;
-
-    machines = MachineType_NUM;
-    max_machines = MachineType_base_number(MachineType_NUM);
-
-    for (int m = 0; m < machines; m++) {
-        for (NodeID i = 0; i < MachineType_base_count((MachineType)m); i++) {
-            // we use "d+max_machines" below since the "destination"
-            // switches for the machines are numbered
-            // [MachineType_base_number(MachineType_NUM)...
-            //  2*MachineType_base_number(MachineType_NUM)-1] for the
-            // component network
-            if (link_is_shortest_path_to_node(src, next, d + max_machines,
-                    weights, dist, vnet)) {
-                MachineID mach = {(MachineType)m, i};
-                result.add(mach);
-            }
-            d++;
-        }
-    }
-
-    DPRINTF(RubyNetwork, "Returning shortest path\n"
-            "(src-(2*max_machines)): %d, (next-(2*max_machines)): %d, "
-            "src: %d, next: %d, vnet:%d result: %s\n",
-            (src-(2*max_machines)), (next-(2*max_machines)),
-            src, next, vnet, result);
-
-    return result;
 }
 
 } // namespace ruby
