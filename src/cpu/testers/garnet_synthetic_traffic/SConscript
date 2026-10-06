@@ -34,5 +34,6 @@ if env['CONF']['PROTOCOL'] == 'None':
 SimObject('GarnetSyntheticTraffic.py', sim_objects=['GarnetSyntheticTraffic'])
 
 Source('GarnetSyntheticTraffic.cc')
+Source('OnlineWorkloadController.cc')
 
 DebugFlag('GarnetSyntheticTraffic')

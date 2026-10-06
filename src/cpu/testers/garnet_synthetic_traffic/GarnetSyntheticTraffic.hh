@@ -31,6 +31,7 @@
 
 #include <set>
 #include <deque>
+#include <vector>
 
 #include "base/statistics.hh"
 #include "mem/port.hh"
@@ -68,6 +69,16 @@ class GarnetSyntheticTraffic : public ClockedObject
     void sendOnlinePacket(unsigned destination, uint64_t bytes, uint64_t id);
     std::string drainOnlineArrivals();
     uint64_t onlineInFlight() const;
+    std::string runOnlineWorkload(const std::string &manifest,
+                                  const std::string &position,
+                                  const std::string &catalog,
+                                  const std::string &nonuniformGrid,
+                                  const std::string &endpointMode,
+                                  int kNode,
+                                  int kChip,
+                                  double frequencyGhz,
+                                  const std::string &resultPath);
+    static const std::vector<GarnetSyntheticTraffic *> &onlineEndpoints();
 
     Port &getPort(const std::string &if_name,
                   PortID idx=InvalidPortID) override;
@@ -149,6 +160,8 @@ class GarnetSyntheticTraffic : public ClockedObject
 
     void doRetry();
     void pumpOnlinePackets();
+
+    static std::vector<GarnetSyntheticTraffic *> onlineEndpointRegistry;
 
     friend class MemCompleteEvent;
 };

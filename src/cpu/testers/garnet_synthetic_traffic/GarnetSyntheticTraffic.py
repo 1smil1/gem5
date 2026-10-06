@@ -35,6 +35,7 @@ class GarnetSyntheticTraffic(ClockedObject):
         PyBindMethod("sendOnlinePacket"),
         PyBindMethod("drainOnlineArrivals"),
         PyBindMethod("onlineInFlight"),
+        PyBindMethod("runOnlineWorkload"),
     ]
     type = "GarnetSyntheticTraffic"
     cxx_header = (

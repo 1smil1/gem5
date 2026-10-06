@@ -21,6 +21,11 @@ namespace gem5
 class OnlinePacketRegistry
 {
   public:
+    struct ArrivalInfo
+    {
+        uint64_t id;
+        Tick tick;
+    };
     struct PacketInfo
     {
         uint64_t id;
@@ -90,6 +95,7 @@ class OnlinePacketRegistry
             }
             return; // Synthetic traffic is outside the online registry.
         }
+        arrivalRecords().push_back(ArrivalInfo{it->second.id, curTick()});
         arrivals() << it->second.id << ' ' << curTick() << '\n';
         activeIds().erase(it->second.id);
         freeSlots().push_back(it->second.slot);
@@ -107,6 +113,14 @@ class OnlinePacketRegistry
     }
 
     static size_t inFlight() { return packets().size(); }
+
+    static std::vector<ArrivalInfo>
+    drainArrivalRecords()
+    {
+        std::vector<ArrivalInfo> result;
+        result.swap(arrivalRecords());
+        return result;
+    }
 
   private:
     static std::map<Addr, PacketInfo>& packets()
@@ -137,6 +151,11 @@ class OnlinePacketRegistry
     static std::ostringstream& arrivals()
     {
         static std::ostringstream value;
+        return value;
+    }
+    static std::vector<ArrivalInfo>& arrivalRecords()
+    {
+        static std::vector<ArrivalInfo> value;
         return value;
     }
 };

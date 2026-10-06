@@ -226,6 +226,25 @@ if args.online_control:
             result = {"tick": m5.curTick(), "cause": event.getCause(), "arrivals": arrivals}
         elif op == "state":
             result = {"tick": m5.curTick(), "in_flight": cpus[0].onlineInFlight()}
+        elif op == "run_cpp":
+            result_path = cpus[0].runOnlineWorkload(
+                str(command["manifest"]), str(command["position"]),
+                str(command["catalog"]), str(command["nonuniform_grid"]),
+                str(command["endpoint_mode"]), int(command["k_node"]),
+                int(command["k_chip"]), float(command["frequency_ghz"]),
+                str(command["result_path"]),
+            )
+            result = {
+                "tick": m5.curTick(), "done": True,
+                "result_path": result_path,
+                "in_flight": cpus[0].onlineInFlight(),
+            }
+            with open(result_path, encoding="utf-8") as result_file:
+                summary = json.load(result_file)
+            result.update({
+                "injected": int(summary["message_injected"]),
+                "arrived": int(summary["message_arrived"]),
+            })
         elif op == "quit":
             if cpus[0].onlineInFlight() != 0:
                 raise RuntimeError("cannot quit with online packets in flight")

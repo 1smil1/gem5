@@ -27,6 +27,7 @@
  */
 
 #include "cpu/testers/garnet_synthetic_traffic/GarnetSyntheticTraffic.hh"
+#include "cpu/testers/garnet_synthetic_traffic/OnlineWorkloadController.hh"
 
 #include <cmath>
 #include <iomanip>
@@ -50,6 +51,8 @@ namespace gem5
 {
 
 int TESTER_NETWORK=0;
+std::vector<GarnetSyntheticTraffic *>
+    GarnetSyntheticTraffic::onlineEndpointRegistry;
 
 bool
 GarnetSyntheticTraffic::CpuPort::recvTimingResp(PacketPtr pkt)
@@ -107,8 +110,15 @@ GarnetSyntheticTraffic::GarnetSyntheticTraffic(const Params &p)
     traffic = trafficStringToEnum[trafficType];
 
     id = TESTER_NETWORK++;
+    onlineEndpointRegistry.push_back(this);
     DPRINTF(GarnetSyntheticTraffic,"Config Created: Name = %s , and id = %d\n",
             name(), id);
+}
+
+const std::vector<GarnetSyntheticTraffic *> &
+GarnetSyntheticTraffic::onlineEndpoints()
+{
+    return onlineEndpointRegistry;
 }
 
 Port &
@@ -388,6 +398,23 @@ GarnetSyntheticTraffic::onlineInFlight() const
 {
     panic_if(!onlineMode, "Online in-flight API requires online_mode");
     return OnlinePacketRegistry::inFlight();
+}
+
+std::string
+GarnetSyntheticTraffic::runOnlineWorkload(const std::string &manifest,
+                                           const std::string &position,
+                                           const std::string &catalog,
+                                           const std::string &nonuniformGrid,
+                                           const std::string &endpointMode,
+                                           int kNode,
+                                           int kChip,
+                                           double frequencyGhz,
+                                           const std::string &resultPath)
+{
+    panic_if(!onlineMode, "Online workload controller requires online_mode");
+    OnlineWorkloadController controller(onlineEndpoints(), false);
+    return controller.run(manifest, position, catalog, nonuniformGrid,
+                          endpointMode, kNode, kChip, frequencyGhz, resultPath);
 }
 
 void
