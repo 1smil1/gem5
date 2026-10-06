@@ -55,6 +55,8 @@ namespace gem5
 namespace ruby
 {
 
+const int INFINITE_LATENCY = 10000; // Yes, this is a big hack
+
 namespace {
 void
 topologyInitProgress(const std::string &stage)
@@ -69,6 +71,32 @@ topologyInitProgress(const std::string &stage)
     std::cout << "OMELET_INIT topology " << stage
               << "; elapsed_s=" << elapsed << std::endl;
 }
+
+// Omelet route digest: FNV-1a over the canonical route-table inputs
+// (weights, distances, per-link NetDest marks) so two topology
+// implementations can be compared without changing any simulated behavior.
+// Enabled only with OMELET_ROUTE_DIGEST in the environment.
+struct RouteDigester
+{
+    uint64_t h = 1469598103934665603ULL;
+    void mix(uint64_t v)
+    {
+        h ^= v;
+        h *= 1099511628211ULL;
+    }
+    void mixInt(int x) { mix(static_cast<uint64_t>(static_cast<uint32_t>(x))); }
+};
+
+void
+topologyRouteDigest(const char *label, uint64_t value)
+{
+    if (!std::getenv("OMELET_ROUTE_DIGEST"))
+        return;
+    std::cout << "OMELET_ROUTE_DIGEST " << label << "=0x" << std::hex << value
+              << std::dec << std::endl;
+}
+
+} // anonymous namespace
 
 // WeightMatrix / DistMatrix / DistVector helpers. Defined here so the
 // Topology.cc body stays the single source of truth for the Dijkstra path.
@@ -123,9 +151,6 @@ DistMatrix::init(int num_vnets, int num_switches)
                                         DistVector(num_switches,
                                                    INFINITE_LATENCY)));
 }
-} // anonymous namespace
-
-const int INFINITE_LATENCY = 10000; // Yes, this is a big hack
 
 // Note: In this file, we use the first 2*m_nodes SwitchIDs to
 // represent the input and output endpoint links.  These really are
@@ -229,14 +254,13 @@ Topology::createLinks(Network *net)
         std::to_string(num_switches) + " vnets=" + std::to_string(m_vnets));
     WeightMatrix topology_weights;
     topology_weights.init(m_vnets, num_switches);
-    topologyInitProgress("weights allocated (sparse); allocating latency matrix");
-    Matrix component_latencies(num_switches,
-            std::vector<std::vector<int>>(num_switches,
-            std::vector<int>(m_vnets, -1)));
-    topologyInitProgress("latency matrix allocated; allocating inter-switch matrix");
-    Matrix component_inter_switches(num_switches,
-            std::vector<std::vector<int>>(num_switches,
-            std::vector<int>(m_vnets, 0)));
+    topologyInitProgress("weights allocated (sparse)");
+
+    // component_latencies / component_inter_switches of the pre-sparse code
+    // were dense num_switches^2 x vnets matrices that only ever received
+    // writes and were then discarded by shortest_path() ((void)-cast). No
+    // reader exists anywhere in src/, so the active path allocates neither.
+    // extend_shortest_path() keeps its Matrix& signature unchanged.
 
     topologyInitProgress("matrices allocated; initializing identity weights");
     // Set identity weights to zero
@@ -247,6 +271,8 @@ Topology::createLinks(Network *net)
     }
 
     // Fill in the topology weights and bandwidth multipliers
+    const bool digest_routes = std::getenv("OMELET_ROUTE_DIGEST") != nullptr;
+    RouteDigester weights_digest;
     for (auto link_group : m_link_map) {
         std::pair<int, int> src_dest = link_group.first;
         std::vector<bool> vnet_done(m_vnets, 0);
@@ -264,7 +290,6 @@ Topology::createLinks(Network *net)
                     fatal_if(vnet_done[v], "Two links connecting same src"
                     " and destination cannot support same vnets");
 
-                    component_latencies[src][dst][v] = link->m_latency;
                     topology_weights.set(v, src, dst, link->m_weight);
                     vnet_done[v] = true;
                 }
@@ -278,7 +303,6 @@ Topology::createLinks(Network *net)
                     fatal_if(vnet_done[vnet], "Two links connecting same src"
                     " and destination cannot support same vnets");
 
-                    component_latencies[src][dst][vnet] = link->m_latency;
                     topology_weights.set(vnet, src, dst, link->m_weight);
                     vnet_done[vnet] = true;
                 }
@@ -288,8 +312,33 @@ Topology::createLinks(Network *net)
 
     // Walk topology and hookup the links
     topologyInitProgress("weights populated; shortest paths started");
-    DistMatrix dist = shortest_path(topology_weights, component_latencies,
-                                    component_inter_switches);
+    if (digest_routes) {
+        for (auto link_group : m_link_map) {
+            const int src = link_group.first.first;
+            const int dst = link_group.first.second;
+            for (int v = 0; v < m_vnets; v++) {
+                weights_digest.mixInt(src);
+                weights_digest.mixInt(dst);
+                weights_digest.mixInt(v);
+                weights_digest.mixInt(topology_weights.get(v, src, dst));
+            }
+        }
+        topologyRouteDigest("weights", weights_digest.h);
+    }
+    DistMatrix dist = shortest_path(topology_weights);
+    RouteDigester dist_digest;
+    if (digest_routes) {
+        for (int v = 0; v < m_vnets; v++) {
+            for (int src = 0; src < num_switches; src++) {
+                const DistVector &row = dist(v, src);
+                for (int dst = 0; dst < num_switches; dst++) {
+                    dist_digest.mixInt(row[dst]);
+                }
+            }
+        }
+        topologyRouteDigest("dist", dist_digest.h);
+    }
+    RouteDigester marking_digest;
 
     // Iterate m_link_map directly instead of scanning all (i, j) pairs:
     // every real link has already been registered in m_link_map during
@@ -321,6 +370,15 @@ Topology::createLinks(Network *net)
                 realLink = true;
                 routingMap[v] =
                     shortest_path_to_node(i, j, topology_weights, dist, v);
+                if (digest_routes) {
+                    marking_digest.mixInt(i);
+                    marking_digest.mixInt(j);
+                    marking_digest.mixInt(v);
+                    for (NodeID d : routingMap[v].getAllDest()) {
+                        marking_digest.mixInt(static_cast<int>(d));
+                    }
+                    marking_digest.mixInt(0x40000000);
+                }
             }
         }
         // Make one link for each set of vnets between
@@ -330,6 +388,7 @@ Topology::createLinks(Network *net)
             makeLink(net, i, j, routingMap);
         }
     }
+    topologyRouteDigest("marking", marking_digest.h);
     topologyInitProgress("createLinks completed");
 }
 
@@ -510,13 +569,10 @@ Topology::extend_shortest_path(Matrix &current_dist, Matrix &latencies,
 }
 
 DistMatrix
-Topology::shortest_path(const WeightMatrix &weights, Matrix &latencies,
-                        Matrix &inter_switches)
+Topology::shortest_path(const WeightMatrix &weights)
 {
     // The route table only consumes minimum link weights. Each source row is
     // independent, so sparse shortest-path searches can run concurrently.
-    (void)latencies;
-    (void)inter_switches;
     topologyInitProgress("shortest_path start; using sparse WeightMatrix");
     const int nodes = weights.n;
     const int vnets = weights.vnets;

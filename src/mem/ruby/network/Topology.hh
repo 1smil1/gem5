@@ -151,8 +151,7 @@ class Topology
     void extend_shortest_path(Matrix &current_dist, Matrix &latencies,
                               Matrix &inter_switches);
 
-    DistMatrix shortest_path(const WeightMatrix &weights,
-            Matrix &latencies, Matrix &inter_switches);
+    DistMatrix shortest_path(const WeightMatrix &weights);
 
     bool link_is_shortest_path_to_node(SwitchID src, SwitchID next,
             SwitchID final, const WeightMatrix &weights,
