@@ -97,6 +97,10 @@ def setup_memory_controllers(system, ruby, dir_cntrls, options):
     index = 0
     mem_ctrls = []
     crossbars = []
+    online_network_only = (
+        buildEnv["PROTOCOL"] == "Garnet_standalone"
+        and hasattr(options, "online_control") and options.online_control
+    )
 
     if options.numa_high_bit:
         dir_bits = math.ceil(math.log(options.num_dirs, 2))
@@ -106,7 +110,7 @@ def setup_memory_controllers(system, ruby, dir_cntrls, options):
 
     for dir_cntrl in dir_cntrls:
         crossbar = None
-        if len(system.mem_ranges) > 1:
+        if len(system.mem_ranges) > 1 and not online_network_only:
             crossbar = IOXBar()
             crossbars.append(crossbar)
             dir_cntrl.memory_out_port = crossbar.cpu_side_ports
@@ -122,6 +126,11 @@ def setup_memory_controllers(system, ruby, dir_cntrls, options):
                 intlv_size,
                 options.xor_low_bit,
             )
+            if online_network_only:
+                # Preserve the original address-to-directory mapping. The
+                # standalone directory drains messages without DRAM accesses.
+                dir_ranges.append(dram_intf.range)
+                continue
             if issubclass(mem_type, DRAMInterface):
                 mem_ctrl = m5.objects.MemCtrl(dram=dram_intf)
             else:
@@ -146,7 +155,11 @@ def setup_memory_controllers(system, ruby, dir_cntrls, options):
         index += 1
         dir_cntrl.addr_ranges = dir_ranges
 
-    system.mem_ctrls = mem_ctrls
+    if online_network_only:
+        # RubyPort still needs physical ranges to classify normal requests.
+        system.online_memory = [SimpleMemory(range=r) for r in system.mem_ranges]
+    else:
+        system.mem_ctrls = mem_ctrls
 
     if len(crossbars) > 0:
         ruby.crossbars = crossbars
