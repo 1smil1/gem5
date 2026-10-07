@@ -42,6 +42,8 @@
 #include "pybind11/stl.h"
 
 #include "base/statistics.hh"
+#include "base/cprintf.hh"
+#include "base/logging.hh"
 #include "base/stats/text.hh"
 #include "config/have_hdf5.hh"
 
@@ -87,6 +89,26 @@ GEM5_DEPRECATED_NAMESPACE(Stats, statistics);
 namespace statistics
 {
 
+// Match m5.stats._visit_stats(check_stat): visit each child before its
+// descendants, preserving std::map order and excluding the root's own stats.
+// Keep the same validation and hidden-stat names without wrapping every Info
+// in a Python object for non-debug online communication.
+static void
+validateGroups(Group &root)
+{
+    for (const auto &entry : root.getStatGroups()) {
+        Group &group = *entry.second;
+        for (Info *stat : group.getStats()) {
+            fatal_if(!stat->check() || !stat->baseCheck(),
+                     "statistic '%s' (%d) was not properly initialized "
+                     "by a regStats() function", stat->name, stat->id);
+            if (!(stat->flags & display))
+                stat->name = csprintf("__Stat%06d", stat->id);
+        }
+        validateGroups(group);
+    }
+}
+
 void
 pythonDump()
 {
@@ -125,6 +147,7 @@ pybind_init_stats(py::module_ &m_native)
         .def("enable", &statistics::enable)
         .def("enabled", &statistics::enabled)
         .def("statsList", &statistics::statsList)
+        .def("validateGroups", &statistics::validateGroups)
         ;
 
     py::class_<statistics::Output>(m, "Output")

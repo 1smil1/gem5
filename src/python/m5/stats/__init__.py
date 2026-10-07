@@ -350,7 +350,11 @@ def enable():
             stat.enable()
 
     # New stats
-    _visit_stats(check_stat)
+    if minimal_online_stats and os.environ.get("OMELET_STATS_TRACE") != "1":
+        for group in Root.getInstance().getStatGroups().values():
+            _m5.stats.validateGroups(group)
+    else:
+        _visit_stats(check_stat)
     if not minimal_online_stats:
         _visit_stats(lambda g, s: s.enable())
 
