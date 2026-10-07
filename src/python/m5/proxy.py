@@ -44,6 +44,8 @@
 
 import copy
 
+_params_module = None
+
 
 class BaseProxy(object):
     def __init__(self, search_self, search_up):
@@ -97,11 +99,11 @@ class BaseProxy(object):
     # After all the operators and operands have been defined, this function
     # should be called to perform the actual operation
     def _opcheck(self, result, base):
-        from . import params
-
         for operation, operand in self._ops:
             # Get the operand's value
             if isproxy(operand):
+                from . import params
+
                 operand = operand.unproxy(base)
                 # assert that we are operating with a compatible param
                 if not isinstance(operand, params.NumericParamValue):
@@ -261,9 +263,15 @@ class AllProxy(BaseProxy):
 
 
 def isproxy(obj):
-    from . import params
+    # Import lazily to retain the params/proxy circular initialization order.
+    # Reuse the module; still read its current EthernetAddr class each time.
+    global _params_module
+    if _params_module is None:
+        from . import params
 
-    if isinstance(obj, (BaseProxy, params.EthernetAddr)):
+        _params_module = params
+
+    if isinstance(obj, (BaseProxy, _params_module.EthernetAddr)):
         return True
     elif isinstance(obj, (list, tuple)):
         for v in obj:
