@@ -31,6 +31,7 @@ class OnlinePacketRegistry
         uint64_t id;
         uint64_t bytes;
         uint64_t slot;
+        unsigned destination;
     };
 
     static Addr
@@ -46,12 +47,13 @@ class OnlinePacketRegistry
             throw std::invalid_argument("duplicate online packet id");
         }
         onlineActivated() = true;
+        auto &pool = slotsByDestination()[destination];
         uint64_t slot;
-        if (freeSlots().empty()) {
-            slot = nextSlot()++;
+        if (pool.free.empty()) {
+            slot = pool.next++;
         } else {
-            slot = freeSlots().back();
-            freeSlots().pop_back();
+            slot = pool.free.back();
+            pool.free.pop_back();
         }
         uint64_t stride = 1;
         while (stride < destinations) {
@@ -63,9 +65,12 @@ class OnlinePacketRegistry
         }
         Addr address = (slot * stride + destination) << blockBits;
         if (address >= memoryBytes) {
-            throw std::overflow_error("online packet exceeds gem5 memory range");
+            throw std::overflow_error("online packet exceeds gem5 memory range: destination=" +
+                std::to_string(destination) + " slot=" + std::to_string(slot) +
+                " address=" + std::to_string(address) + " memory_bytes=" +
+                std::to_string(memoryBytes));
         }
-        if (!packets().emplace(address, PacketInfo{id, bytes, slot}).second) {
+        if (!packets().emplace(address, PacketInfo{id, bytes, slot, destination}).second) {
             throw std::logic_error("duplicate online packet address");
         }
         return address;
@@ -98,7 +103,7 @@ class OnlinePacketRegistry
         arrivalRecords().push_back(ArrivalInfo{it->second.id, curTick()});
         arrivals() << it->second.id << ' ' << curTick() << '\n';
         activeIds().erase(it->second.id);
-        freeSlots().push_back(it->second.slot);
+        slotsByDestination().at(it->second.destination).free.push_back(it->second.slot);
         packets().erase(it);
         exitSimLoop("online packet arrival");
     }
@@ -138,14 +143,16 @@ class OnlinePacketRegistry
         static bool value = false;
         return value;
     }
-    static std::vector<uint64_t>& freeSlots()
+    struct SlotPool
     {
-        static std::vector<uint64_t> value;
-        return value;
-    }
-    static uint64_t& nextSlot()
+        uint64_t next = 0;
+        std::vector<uint64_t> free;
+    };
+    // The low address bits select the destination. Slots for different
+    // destinations occupy disjoint addresses, so each can start at zero.
+    static std::map<unsigned, SlotPool>& slotsByDestination()
     {
-        static uint64_t value = 0;
+        static std::map<unsigned, SlotPool> value;
         return value;
     }
     static std::ostringstream& arrivals()
