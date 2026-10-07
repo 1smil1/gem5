@@ -12,6 +12,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <unordered_map>
+#include <pybind11/pybind11.h>
 
 #include "cpu/testers/garnet_synthetic_traffic/GarnetSyntheticTraffic.hh"
 #include "mem/ruby/network/garnet/OnlinePacketRegistry.hh"
@@ -173,27 +174,34 @@ std::string replaceExt(const std::string &path, const std::string &ext)
 }
 
 struct TraceReader {
-    FILE *pipe = nullptr;
+    // runOnlineWorkload is a Python-bound method retaining the GIL. Reuse
+    // its interpreter's buffered bz2 reader instead of spawning per group.
+    pybind11::object stream = pybind11::none();
+    std::string path;
+    size_t read(void *buffer, size_t requested)
+    {
+        std::string data;
+        try {
+            data = stream.attr("read")(requested).cast<std::string>();
+        } catch (const pybind11::error_already_set &error) {
+            throw std::runtime_error(path + ": BZ2 read failed: " + error.what());
+        }
+        std::memcpy(buffer, data.data(), data.size());
+        return data.size();
+    }
     void skipBytes(uint64_t bytes, const std::string &path, const char *what)
     {
         char buffer[4096];
         while (bytes != 0) {
             const size_t requested = static_cast<size_t>(std::min<uint64_t>(bytes, sizeof(buffer)));
-            if (fread(buffer, 1, requested, pipe) != requested)
+            if (read(buffer, requested) != requested)
                 fail(path, what);
             bytes -= requested;
         }
     }
-    explicit TraceReader(const std::string &path)
+    explicit TraceReader(const std::string &path) : path(path)
     {
-        std::string command = "bzip2 -dc \"" + path + "\"";
-#ifdef _WIN32
-        pipe = _popen(command.c_str(), "rb");
-#else
-        pipe = popen(command.c_str(), "r");
-#endif
-        if (!pipe)
-            throw std::runtime_error("cannot open BZ2 template: " + path);
+        stream = pybind11::module_::import("bz2").attr("open")(path, "rb");
         struct Header {
             uint32_t magic;
             float version;
@@ -207,7 +215,7 @@ struct TraceReader {
             char padding[8];
         } __attribute__((packed));
         Header header{};
-        if (fread(&header, sizeof(header), 1, pipe) != 1)
+        if (read(&header, sizeof(header)) != sizeof(header))
             fail(path, "short netrace header");
         skipBytes(header.notesLength, path, "short netrace notes");
         skipBytes(header.regions * 24ULL, path, "short netrace regions");
@@ -232,12 +240,12 @@ struct TraceReader {
             uint32_t bytes;
         } __attribute__((packed));
         Raw raw{};
-        const size_t count = fread(&raw, sizeof(raw), 1, pipe);
+        const size_t count = read(&raw, sizeof(raw));
         if (count == 0) {
-            if (!feof(pipe))
-                throw std::runtime_error("failed while reading BZ2 template");
             return false;
         }
+        if (count != sizeof(raw))
+            fail(path, "short netrace packet");
         if (raw.deps != 0)
             fail("netrace", "online templates cannot contain dependencies");
         packet->id = raw.id;
@@ -248,14 +256,10 @@ struct TraceReader {
     }
     void close()
     {
-        if (!pipe)
+        if (stream.is_none())
             return;
-#ifdef _WIN32
-        _pclose(pipe);
-#else
-        pclose(pipe);
-#endif
-        pipe = nullptr;
+        stream.attr("close")();
+        stream = pybind11::none();
     }
     ~TraceReader() { close(); }
 };
