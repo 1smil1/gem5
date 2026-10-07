@@ -152,6 +152,7 @@ class Sequencer : public RubyPort
     virtual int functionalWrite(Packet *func_pkt) override;
 
     void recordRequestType(SequencerRequestType requestType);
+    bool detailedLatencyStatsEnabled() const { return m_detailedLatencyStats; }
     statistics::Histogram& getOutstandReqHist() { return m_outstandReqHist; }
 
     statistics::Histogram& getLatencyHist() { return m_latencyHist; }
@@ -253,6 +254,7 @@ class Sequencer : public RubyPort
     uint64_t m_unaddressedTransactionCnt;
 
     bool m_runningGarnetStandalone;
+    bool m_detailedLatencyStats;
 
     //! Histogram for number of outstanding requests per cycle.
     statistics::Histogram m_outstandReqHist;

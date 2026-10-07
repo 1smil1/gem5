@@ -423,6 +423,9 @@ Profiler::collateStats()
             Sequencer *seq = ctr->getCPUSequencer();
             if (seq != NULL) {
                 // add all the latencies
+                fatal_if(!seq->detailedLatencyStatsEnabled(),
+                         "Detailed Sequencer latency statistics were disabled; "
+                         "enable communication debug before starting gem5.");
                 rubyProfilerStats.
                         m_latencyHistSeqr.add(seq->getLatencyHist());
                 rubyProfilerStats.

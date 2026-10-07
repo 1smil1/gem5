@@ -41,6 +41,9 @@
 
 #include "mem/ruby/system/Sequencer.hh"
 
+#include <cstdlib>
+#include <cstring>
+
 #include "arch/x86/ldstflags.hh"
 #include "base/compiler.hh"
 #include "base/logging.hh"
@@ -84,6 +87,9 @@ Sequencer::Sequencer(const Params &p)
     m_unaddressedTransactionCnt = 0;
 
     m_runningGarnetStandalone = p.garnet_standalone;
+    const char *dumpStats = std::getenv("OMELET_COMM_DUMP_STATS");
+    m_detailedLatencyStats = !(m_runningGarnetStandalone && dumpStats &&
+                              std::strcmp(dumpStats, "0") == 0);
 
 
     // These statistical variables are not for display.
@@ -93,6 +99,11 @@ Sequencer::Sequencer(const Params &p)
     m_latencyHist.init(10);
     m_hitLatencyHist.init(10);
     m_missLatencyHist.init(10);
+
+    // Request-type/machine histograms are only consumed by the detailed Ruby
+    // profiler. Keep aggregate counters and all request/response machinery.
+    if (!m_detailedLatencyStats)
+        return;
 
     for (int i = 0; i < RubyRequestType_NUM; i++) {
         m_typeLatencyHist.push_back(new statistics::Histogram());
@@ -277,6 +288,8 @@ void Sequencer::resetStats()
     m_latencyHist.reset();
     m_hitLatencyHist.reset();
     m_missLatencyHist.reset();
+    if (!m_detailedLatencyStats)
+        return;
     for (int i = 0; i < RubyRequestType_NUM; i++) {
         m_typeLatencyHist[i]->reset();
         m_hitTypeLatencyHist[i]->reset();
@@ -399,10 +412,15 @@ Sequencer::recordMissLatency(SequencerRequest* srequest, bool llscSuccess,
              "", "", printAddress(srequest->pkt->getAddr()), total_lat);
 
     m_latencyHist.sample(total_lat);
+    if (isExternalHit)
+        m_missLatencyHist.sample(total_lat);
+    else
+        m_hitLatencyHist.sample(total_lat);
+    if (!m_detailedLatencyStats)
+        return;
     m_typeLatencyHist[type]->sample(total_lat);
 
     if (isExternalHit) {
-        m_missLatencyHist.sample(total_lat);
         m_missTypeLatencyHist[type]->sample(total_lat);
 
         if (respondingMach != MachineType_NUM) {
@@ -427,7 +445,6 @@ Sequencer::recordMissLatency(SequencerRequest* srequest, bool llscSuccess,
             }
         }
     } else {
-        m_hitLatencyHist.sample(total_lat);
         m_hitTypeLatencyHist[type]->sample(total_lat);
 
         if (respondingMach != MachineType_NUM) {
