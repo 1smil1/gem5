@@ -147,6 +147,18 @@ pybind_init_stats(py::module_ &m_native)
         .def("enabled", &statistics::enabled)
         .def("statsList", &statistics::statsList)
         .def("validateGroups", &statistics::validateGroups)
+        .def("addStatGroupHandles", [](py::capsule parent, const char *name,
+                                       py::capsule child) {
+            auto *parent_group = static_cast<statistics::Group *>(
+                PyCapsule_GetPointer(parent.ptr(), "gem5.statistics.Group"));
+            if (!parent_group)
+                throw py::error_already_set();
+            auto *child_group = static_cast<statistics::Group *>(
+                PyCapsule_GetPointer(child.ptr(), "gem5.statistics.Group"));
+            if (!child_group)
+                throw py::error_already_set();
+            parent_group->addStatGroup(name, child_group);
+        })
         ;
 
     py::class_<statistics::Output>(m, "Output")

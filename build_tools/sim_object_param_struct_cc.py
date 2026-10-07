@@ -210,6 +210,12 @@ py::module_ m = m_internal.def_submodule("param_${sim_object}");
             break  # A Python base need not be a C++ base (e.g. SystemC).
         ancestor = ancestor._base
     if ancestor and ancestor.cxx_class == "gem5::SimObject":
+        # Borrowed handle: C++ SimObjects outlive statistics-tree binding.
+        code(
+            '.def("_statGroupHandle", [](${{sim_object.cxx_class}} &obj) { '
+            'return py::capsule(static_cast<gem5::statistics::Group *>('
+            'static_cast<gem5::SimObject *>(&obj)), "gem5.statistics.Group"); })'
+        )
         exported = {exp.name for exp in sim_object.cxx_exports}
         for method in ("init", "initState", "regProbePoints", "regProbeListeners", "startup"):
             if method not in exported:

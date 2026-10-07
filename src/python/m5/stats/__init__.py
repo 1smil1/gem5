@@ -277,6 +277,10 @@ def _visit_stats(visitor, root=None):
 
 
 def _bindStatHierarchy(root, stat_parent=None):
+    # Online configs contain real SimObjects. Borrow native Group handles only
+    # for this traversal, avoiding repeated pybind multiple-inheritance casts.
+    use_handles = os.environ.get("OMELET_COMM_DUMP_STATS") in ("0", "1")
+
     def _bind_obj(name, obj, stat_parent):
         if isNullPointer(obj):
             return
@@ -295,16 +299,21 @@ def _bindStatHierarchy(root, stat_parent=None):
             cc_obj = obj.getCCObject()
             next_parent = stat_parent
             if isinstance(cc_obj, _m5.stats.Group):
+                group = cc_obj._statGroupHandle() if use_handles else cc_obj
                 if stat_parent is not None:
-                    stat_parent.addStatGroup(name, cc_obj)
-                next_parent = cc_obj
+                    if use_handles:
+                        _m5.stats.addStatGroupHandles(stat_parent, name, group)
+                    else:
+                        stat_parent.addStatGroup(name, group)
+                next_parent = group
 
             _bindStatHierarchy(obj, next_parent)
 
     if stat_parent is None:
         root_cc_obj = root.getCCObject()
         if isinstance(root_cc_obj, _m5.stats.Group):
-            stat_parent = root_cc_obj
+            stat_parent = (root_cc_obj._statGroupHandle() if use_handles
+                           else root_cc_obj)
     for name, obj in root._children.items():
         _bind_obj(name, obj, stat_parent)
 
