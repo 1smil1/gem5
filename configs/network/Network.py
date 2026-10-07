@@ -252,95 +252,59 @@ def init_network(options, network, InterfaceClass):
         network.garnet_deadlock_threshold = options.garnet_deadlock_threshold
 
         for intLink in network.int_links:
-            intLink.src_net_bridge = NetworkBridge(
-                link=intLink.network_link,
-                vtype="OBJECT_LINK",
-                width=intLink.src_node.width,
-            )
-            intLink.src_cred_bridge = NetworkBridge(
-                link=intLink.credit_link,
-                vtype="LINK_OBJECT",
-                width=intLink.src_node.width,
-            )
-            intLink.dst_net_bridge = NetworkBridge(
-                link=intLink.network_link,
-                vtype="LINK_OBJECT",
-                width=intLink.dst_node.width,
-            )
-            intLink.dst_cred_bridge = NetworkBridge(
-                link=intLink.credit_link,
-                vtype="OBJECT_LINK",
-                width=intLink.dst_node.width,
-            )
+            # GarnetIntLink enables these pairs only for CDC or SerDes.
+            # An inactive bridge never participates in timing or flow control.
+            if intLink.src_cdc or intLink.src_serdes:
+                intLink.src_net_bridge = NetworkBridge(
+                    link=intLink.network_link,
+                    vtype="OBJECT_LINK",
+                    width=intLink.src_node.width,
+                )
+                intLink.src_cred_bridge = NetworkBridge(
+                    link=intLink.credit_link,
+                    vtype="LINK_OBJECT",
+                    width=intLink.src_node.width,
+                )
+            if intLink.dst_cdc or intLink.dst_serdes:
+                intLink.dst_net_bridge = NetworkBridge(
+                    link=intLink.network_link,
+                    vtype="LINK_OBJECT",
+                    width=intLink.dst_node.width,
+                )
+                intLink.dst_cred_bridge = NetworkBridge(
+                    link=intLink.credit_link,
+                    vtype="OBJECT_LINK",
+                    width=intLink.dst_node.width,
+                )
 
         for extLink in network.ext_links:
-            ext_net_bridges = []
-            ext_net_bridges.append(
-                NetworkBridge(
-                    link=extLink.network_links[0],
-                    vtype="OBJECT_LINK",
-                    width=extLink.width,
-                )
-            )
-            ext_net_bridges.append(
-                NetworkBridge(
-                    link=extLink.network_links[1],
-                    vtype="LINK_OBJECT",
-                    width=extLink.width,
-                )
-            )
-            extLink.ext_net_bridge = ext_net_bridges
-
-            ext_credit_bridges = []
-            ext_credit_bridges.append(
-                NetworkBridge(
-                    link=extLink.credit_links[0],
-                    vtype="LINK_OBJECT",
-                    width=extLink.width,
-                )
-            )
-            ext_credit_bridges.append(
-                NetworkBridge(
-                    link=extLink.credit_links[1],
-                    vtype="OBJECT_LINK",
-                    width=extLink.width,
-                )
-            )
-            extLink.ext_cred_bridge = ext_credit_bridges
-
-            int_net_bridges = []
-            int_net_bridges.append(
-                NetworkBridge(
-                    link=extLink.network_links[0],
-                    vtype="LINK_OBJECT",
-                    width=extLink.int_node.width,
-                )
-            )
-            int_net_bridges.append(
-                NetworkBridge(
-                    link=extLink.network_links[1],
-                    vtype="OBJECT_LINK",
-                    width=extLink.int_node.width,
-                )
-            )
-            extLink.int_net_bridge = int_net_bridges
-
-            int_cred_bridges = []
-            int_cred_bridges.append(
-                NetworkBridge(
-                    link=extLink.credit_links[0],
-                    vtype="OBJECT_LINK",
-                    width=extLink.int_node.width,
-                )
-            )
-            int_cred_bridges.append(
-                NetworkBridge(
-                    link=extLink.credit_links[1],
-                    vtype="LINK_OBJECT",
-                    width=extLink.int_node.width,
-                )
-            )
-            extLink.int_cred_bridge = int_cred_bridges
+            # GarnetExtLink uses the external and internal pairs independently.
+            if extLink.ext_cdc or extLink.ext_serdes:
+                extLink.ext_net_bridge = [
+                    NetworkBridge(link=extLink.network_links[0],
+                                  vtype="OBJECT_LINK", width=extLink.width),
+                    NetworkBridge(link=extLink.network_links[1],
+                                  vtype="LINK_OBJECT", width=extLink.width),
+                ]
+                extLink.ext_cred_bridge = [
+                    NetworkBridge(link=extLink.credit_links[0],
+                                  vtype="LINK_OBJECT", width=extLink.width),
+                    NetworkBridge(link=extLink.credit_links[1],
+                                  vtype="OBJECT_LINK", width=extLink.width),
+                ]
+            if extLink.int_cdc or extLink.int_serdes:
+                extLink.int_net_bridge = [
+                    NetworkBridge(link=extLink.network_links[0],
+                                  vtype="LINK_OBJECT", width=extLink.int_node.width),
+                    NetworkBridge(link=extLink.network_links[1],
+                                  vtype="OBJECT_LINK", width=extLink.int_node.width),
+                ]
+                extLink.int_cred_bridge = [
+                    NetworkBridge(link=extLink.credit_links[0],
+                                  vtype="OBJECT_LINK", width=extLink.int_node.width),
+                    NetworkBridge(link=extLink.credit_links[1],
+                                  vtype="LINK_OBJECT", width=extLink.int_node.width),
+                ]
 
     if options.network == "simple":
         if options.simple_physical_channels:

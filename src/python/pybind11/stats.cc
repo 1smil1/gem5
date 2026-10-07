@@ -89,23 +89,22 @@ GEM5_DEPRECATED_NAMESPACE(Stats, statistics);
 namespace statistics
 {
 
-// Match m5.stats._visit_stats(check_stat): visit each child before its
-// descendants, preserving std::map order and excluding the root's own stats.
+// Match m5.stats._visit_stats(check_stat): the caller supplies each top-level
+// child. Visit its statistics before its descendants, preserving map order.
 // Keep the same validation and hidden-stat names without wrapping every Info
 // in a Python object for non-debug online communication.
 static void
 validateGroups(Group &root)
 {
+    for (Info *stat : root.getStats()) {
+        fatal_if(!stat->check() || !stat->baseCheck(),
+                 "statistic '%s' (%d) was not properly initialized "
+                 "by a regStats() function", stat->name, stat->id);
+        if (!(stat->flags & display))
+            stat->name = csprintf("__Stat%06d", stat->id);
+    }
     for (const auto &entry : root.getStatGroups()) {
-        Group &group = *entry.second;
-        for (Info *stat : group.getStats()) {
-            fatal_if(!stat->check() || !stat->baseCheck(),
-                     "statistic '%s' (%d) was not properly initialized "
-                     "by a regStats() function", stat->name, stat->id);
-            if (!(stat->flags & display))
-                stat->name = csprintf("__Stat%06d", stat->id);
-        }
-        validateGroups(group);
+        validateGroups(*entry.second);
     }
 }
 
