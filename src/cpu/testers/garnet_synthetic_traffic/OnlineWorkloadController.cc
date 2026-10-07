@@ -523,55 +523,6 @@ OnlineWorkloadController::run(const std::string &manifest,
             }
         }
 
-        bool allDone = true;
-        uint64_t nextEvent = std::numeric_limits<uint64_t>::max();
-        for (size_t i = 0; i < phases.size(); ++i) {
-            Phase &phase = phases[i];
-            if (phase.status != 3)
-                allDone = false;
-            if (phase.status == 1) {
-                nextEvent = std::min(nextEvent, phase.computeEnd);
-            } else if (phase.status == 0 && phase.remainingDeps == 0) {
-                bool available = true;
-                const auto catalogIt = catalogLayers.find(phase.layer);
-                if (catalogIt != catalogLayers.end() && catalogIt->second.block >= 0) {
-                    int selected = -1;
-                    for (size_t candidate = 0; candidate < catalogIt->second.candidates.size(); ++candidate) {
-                        bool candidateAvailable = true;
-                        for (const int resource : catalogIt->second.candidates[candidate]) {
-                            if (resource < 0 || resource >= numResources ||
-                                resourceOwner[resource] != -1 || resourceRelease[resource] > tick)
-                                candidateAvailable = false;
-                        }
-                        if (candidateAvailable) {
-                            selected = static_cast<int>(candidate);
-                            break;
-                        }
-                    }
-                    if (selected < 0) {
-                        available = false;
-                    } else {
-                        phaseCandidate[static_cast<int>(i)] = selected;
-                        phase.resources = catalogIt->second.candidates[static_cast<size_t>(selected)];
-                    }
-                }
-                for (const int resource : phase.resources)
-                    available &= resourceOwner[resource] == -1 && resourceRelease[resource] <= tick;
-                if (available) {
-                    phase.status = 1;
-                    phase.computeStart = tick;
-                    phase.computeEnd = tick + static_cast<uint64_t>(std::ceil(
-                        phase.computeCycles * 1000.0 / frequency_ghz));
-                    for (const int resource : phase.resources)
-                        resourceOwner[resource] = phase.id;
-                    nextEvent = std::min(nextEvent, phase.computeEnd);
-                } else {
-                    for (const int resource : phase.resources)
-                        nextEvent = std::min(nextEvent, resourceRelease[resource]);
-                }
-            }
-        }
-
         for (size_t i = 0; i < phases.size(); ++i) {
             Phase &phase = phases[i];
             if (phase.status != 1 || phase.computeEnd > tick)
@@ -616,15 +567,61 @@ OnlineWorkloadController::run(const std::string &manifest,
             }
         }
 
-        allDone = true;
+        uint64_t nextEvent = std::numeric_limits<uint64_t>::max();
+        for (size_t i = 0; i < phases.size(); ++i) {
+            Phase &phase = phases[i];
+            if (phase.status == 1) {
+                nextEvent = std::min(nextEvent, phase.computeEnd);
+            } else if (phase.status == 0 && phase.remainingDeps == 0) {
+                bool available = true;
+                const auto catalogIt = catalogLayers.find(phase.layer);
+                if (catalogIt != catalogLayers.end() && catalogIt->second.block >= 0) {
+                    int selected = -1;
+                    for (size_t candidate = 0; candidate < catalogIt->second.candidates.size(); ++candidate) {
+                        bool candidateAvailable = true;
+                        for (const int resource : catalogIt->second.candidates[candidate]) {
+                            if (resource < 0 || resource >= numResources ||
+                                resourceOwner[resource] != -1 || resourceRelease[resource] > tick)
+                                candidateAvailable = false;
+                        }
+                        if (candidateAvailable) {
+                            selected = static_cast<int>(candidate);
+                            break;
+                        }
+                    }
+                    if (selected < 0) {
+                        available = false;
+                    } else {
+                        phaseCandidate[static_cast<int>(i)] = selected;
+                        phase.resources = catalogIt->second.candidates[static_cast<size_t>(selected)];
+                    }
+                }
+                for (const int resource : phase.resources)
+                    available &= resourceOwner[resource] == -1 && resourceRelease[resource] <= tick;
+                if (available) {
+                    phase.status = 1;
+                    phase.computeStart = tick;
+                    phase.computeEnd = tick + static_cast<uint64_t>(std::ceil(
+                        phase.computeCycles * 1000.0 / frequency_ghz));
+                    for (const int resource : phase.resources)
+                        resourceOwner[resource] = phase.id;
+                    nextEvent = std::min(nextEvent, phase.computeEnd);
+                }
+            }
+        }
+
+        bool allDone = true;
         for (const Phase &phase : phases)
             allDone &= phase.status == 3;
         if (allDone && packetRun.empty())
             break;
-        if (nextEvent == std::numeric_limits<uint64_t>::max())
+        if (nextEvent == std::numeric_limits<uint64_t>::max()) {
+            if (packetRun.empty())
+                throw std::runtime_error("Omelet workload stalled: dependencies or resources");
             nextEvent = tick + 1000000000ULL;
+        }
         if (nextEvent <= tick)
-            nextEvent = tick + 1;
+            throw std::runtime_error("Omelet scheduler selected a non-future compute event");
         simulate(nextEvent - tick);
         tick = curTick();
     }
