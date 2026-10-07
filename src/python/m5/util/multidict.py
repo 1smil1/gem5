@@ -59,7 +59,9 @@ class multidict(object):
         try:
             return self.local[key]
         except KeyError as e:
-            if not self.deleted.get(key, False) and key in self.parent:
+            # The parent lookup already raises KeyError for missing values.
+            # A separate membership pass repeatedly traverses the same chain.
+            if not self.deleted.get(key, False):
                 return self.parent[key]
             else:
                 raise KeyError(e)
@@ -68,20 +70,25 @@ class multidict(object):
         return len(self.local) + len(self.parent)
 
     def next(self):
-        for key, value in self.local.items():
-            yield key, value
-
-        if self.parent:
-            for key, value in self.parent.next():
-                if key not in self.local and key not in self.deleted:
+        node = self
+        hidden = set()
+        while isinstance(node, multidict):
+            for key, value in node.local.items():
+                if key not in hidden:
+                    yield key, value
+            hidden.update(node.local)
+            hidden.update(node.deleted)
+            node = node.parent
+        if node:
+            for key, value in node.next():
+                if key not in hidden:
                     yield key, value
 
     def has_key(self, key):
         return key in self
 
     def items(self):
-        for item in self.next():
-            yield item
+        return self.next()
 
     def keys(self):
         for key, value in self.next():
