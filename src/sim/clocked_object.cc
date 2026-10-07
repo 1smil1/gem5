@@ -46,6 +46,21 @@ namespace gem5
 ClockedObject::ClockedObject(const ClockedObjectParams &p) :
     SimObject(p), Clocked(*p.clk_domain), powerState(p.power_state)
 {
+    if (p.native_power_state) {
+        fatal_if(!p.power_state || typeid(*p.power_state) != typeid(PowerState),
+                 "Native power state requires a plain PowerState template");
+        fatal_if(!p.power_state->params().leaders.empty(),
+                 "Native power state does not support power-domain leaders");
+        nativePowerStateParams =
+            std::make_unique<PowerStateParams>(p.power_state->params());
+        nativePowerStateParams->name = name() + ".power_state";
+        nativePowerStateParams->eventq_index = p.eventq_index;
+        nativePowerState = std::make_unique<PowerState>(*nativePowerStateParams);
+        powerState = nativePowerState.get();
+        // PowerState's lifecycle methods are inherited no-ops; its statistics
+        // are initialized/reset through this same parent-child Group tree.
+        addStatGroup("power_state", powerState);
+    }
     // Register the power_model with the object
     // Slightly counter-intuitively, power models need to to register with the
     // clocked object and not the power stated object because the power model

@@ -33,10 +33,18 @@
 # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+import os
+
+from m5.defines import buildEnv
 from m5.objects.PowerState import PowerState
 from m5.SimObject import SimObject
 from m5.params import *
 from m5.proxy import *
+
+_native_online_power_state = (
+    buildEnv["PROTOCOL"] == "Garnet_standalone"
+    and os.environ.get("OMELET_COMM_DUMP_STATS") == "0"
+)
 
 
 class ClockedObject(SimObject):
@@ -52,4 +60,11 @@ class ClockedObject(SimObject):
     # Power model for this ClockedObject
     power_model = VectorParam.PowerModel([], "Power models")
 
-    power_state = Param.PowerState(PowerState(), "Power state")
+    native_power_state = Param.Bool(
+        _native_online_power_state,
+        "Create an independent native PowerState from the supplied parameter template",
+    )
+    power_state = Param.PowerState(
+        Parent.online_power_state_template if _native_online_power_state else PowerState(),
+        "Power state (parameter template when native_power_state is enabled)",
+    )

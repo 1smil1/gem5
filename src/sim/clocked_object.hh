@@ -44,6 +44,7 @@
 #ifndef __SIM_CLOCKED_OBJECT_HH__
 #define __SIM_CLOCKED_OBJECT_HH__
 
+#include <memory>
 
 #include "params/ClockedObject.hh"
 #include "sim/core.hh"
@@ -233,6 +234,11 @@ class Clocked
  */
 class ClockedObject : public SimObject, public Clocked
 {
+  private:
+    // The Params reference retained by SimObject must outlive the native child.
+    std::unique_ptr<PowerStateParams> nativePowerStateParams;
+    std::unique_ptr<PowerState> nativePowerState;
+
   public:
     ClockedObject(const ClockedObjectParams &p);
 

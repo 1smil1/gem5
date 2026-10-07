@@ -118,6 +118,9 @@ cpus = [
 ]
 
 system = System(cpu=cpus, mem_ranges=[AddrRange(args.mem_size)])
+if ClockedObject.native_power_state:
+    system.online_power_state_template = PowerState()
+    init_progress("native per-object PowerState creation enabled; independent C++ states retained")
 
 
 system.voltage_domain = VoltageDomain(voltage=args.sys_voltage)
