@@ -537,24 +537,21 @@ OnlineWorkloadController::run(const std::string &manifest,
             }
             phase.status = 2;
             const Group &group = groups.at(phase.group);
-            std::vector<PacketTemplate> packets;
             TraceReader reader(group.path);
             PacketTemplate packet;
-            while (reader.next(&packet))
-                packets.push_back(packet);
             const int run = nextRunId++;
             runPhase[run] = static_cast<int>(i);
             runRemaining[run] = 0;
             runs.push_back(Run{run, static_cast<int>(i), phase.group, phase.input, tick, 0, 0, 0});
             if (inputFirst[phase.input] == 0)
                 inputFirst[phase.input] = tick;
-            for (const PacketTemplate &templ : packets) {
-                const int source = routerFor(phase.input, static_cast<int>(i), templ.src);
-                const int destination = routerFor(phase.input, static_cast<int>(i), templ.dst);
+            while (reader.next(&packet)) {
+                const int source = routerFor(phase.input, static_cast<int>(i), packet.src);
+                const int destination = routerFor(phase.input, static_cast<int>(i), packet.dst);
                 if (source == destination)
                     continue;
                 const uint64_t id = nextPacketId++;
-                endpoints[source]->sendOnlinePacket(destination, templ.bytes, id);
+                endpoints[source]->sendOnlinePacket(destination, packet.bytes, id);
                 packetRun[id] = run;
                 injectedAt[id] = tick;
                 ++runRemaining[run];
