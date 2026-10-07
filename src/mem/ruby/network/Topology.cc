@@ -30,6 +30,7 @@
 #include "mem/ruby/network/Topology.hh"
 
 #include <cassert>
+#include <array>
 #include <atomic>
 #include <cerrno>
 #include <climits>
@@ -38,6 +39,7 @@
 #include <mutex>
 #include <cstdlib>
 #include <functional>
+#include <deque>
 #include <future>
 #include <queue>
 #include <thread>
@@ -352,6 +354,7 @@ Topology::createLinks(Network *net)
         routing_maps.emplace_back(m_vnets);
 
     std::vector<std::vector<RouteEdge>> route_edges(m_vnets);
+    std::vector<int> maximum_weight(m_vnets, 0);
     std::vector<std::vector<std::vector<std::pair<int, int>>>> reverse_adj(
         m_vnets, std::vector<std::vector<std::pair<int, int>>>(num_switches));
     for (int v = 0; v < m_vnets; ++v) {
@@ -360,6 +363,7 @@ Topology::createLinks(Network *net)
             const int dst = link_keys[i].second;
             const int weight = topology_weights.get(v, src, dst);
             if (weight > 0 && weight != INFINITE_LATENCY) {
+                maximum_weight[v] = std::max(maximum_weight[v], weight);
                 route_edges[v].push_back({src, dst, weight, i});
                 reverse_adj[v][dst].push_back({src, weight});
             }
@@ -402,22 +406,56 @@ Topology::createLinks(Network *net)
         std::to_string(m_nodes));
     const bool report_init_progress = std::getenv("OMELET_INIT_PROGRESS");
     for (int v = 0; v < m_vnets; ++v) {
+        const bool bounded_weights = maximum_weight[v] <= 2;
+        topologyInitProgress("reverse shortest paths vnet=" +
+            std::to_string(v + 1) + "/" + std::to_string(m_vnets) +
+            " engine=" + (bounded_weights ? "bounded-weight FIFO" : "Dijkstra") +
+            " maximum_weight=" + std::to_string(maximum_weight[v]));
+        std::vector<int> distance(num_switches, INFINITE_LATENCY);
+        std::array<std::deque<Edge>, 3> buckets;
         for (int d = 0; d < m_nodes; ++d) {
             const int target = m_nodes + d;
-            std::vector<int> distance(num_switches, INFINITE_LATENCY);
-            std::priority_queue<Edge, std::vector<Edge>, std::greater<Edge>> pending;
+            std::fill(distance.begin(), distance.end(), INFINITE_LATENCY);
             distance[target] = 0;
-            pending.emplace(0, target);
-            while (!pending.empty()) {
-                const auto [cost, node] = pending.top();
-                pending.pop();
-                if (cost != distance[node])
-                    continue;
-                for (const auto &[previous, weight] : reverse_adj[v][node]) {
-                    const int candidate = cost + weight;
-                    if (candidate < distance[previous]) {
-                        distance[previous] = candidate;
-                        pending.emplace(candidate, previous);
+            if (bounded_weights) {
+                // Dial's queue for positive integer costs <= 2. Three cyclic
+                // buckets pop the same minimum distances without a heap;
+                // route marking and the weighted graph remain unchanged.
+                buckets[0].emplace_back(0, target);
+                size_t pending = 1;
+                int current_cost = 0;
+                while (pending) {
+                    while (buckets[current_cost % 3].empty())
+                        ++current_cost;
+                    auto &bucket = buckets[current_cost % 3];
+                    const auto [cost, node] = bucket.front();
+                    bucket.pop_front();
+                    --pending;
+                    if (cost != distance[node])
+                        continue;
+                    for (const auto &[previous, weight] : reverse_adj[v][node]) {
+                        const int candidate = cost + weight;
+                        if (candidate < distance[previous]) {
+                            distance[previous] = candidate;
+                            buckets[candidate % 3].emplace_back(candidate, previous);
+                            ++pending;
+                        }
+                    }
+                }
+            } else {
+                std::priority_queue<Edge, std::vector<Edge>, std::greater<Edge>> pending;
+                pending.emplace(0, target);
+                while (!pending.empty()) {
+                    const auto [cost, node] = pending.top();
+                    pending.pop();
+                    if (cost != distance[node])
+                        continue;
+                    for (const auto &[previous, weight] : reverse_adj[v][node]) {
+                        const int candidate = cost + weight;
+                        if (candidate < distance[previous]) {
+                            distance[previous] = candidate;
+                            pending.emplace(candidate, previous);
+                        }
                     }
                 }
             }
