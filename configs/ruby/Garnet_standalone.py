@@ -70,6 +70,17 @@ def create_system(
     import time
     init_started = time.monotonic()
     print(f"OMELET_INIT creating Ruby controllers count={options.num_cpus}", flush=True)
+    shared_online_cache = None
+    if getattr(options, "online_control", False):
+        # Garnet_standalone's L1 protocol never reads cacheMemory.  Online
+        # packets are WriteReq traffic, so sequencers only need a valid
+        # RubyCache object for their compatibility interface.
+        shared_online_cache = L1Cache(
+            size=options.l1d_size,
+            assoc=options.l1d_assoc,
+            ruby_system=ruby_system,
+        )
+
     for i in range(options.num_cpus):
         if i % 1000 == 0:
             print(f"OMELET_INIT Ruby controllers {i}/{options.num_cpus}; wall_s={time.monotonic() - init_started:.1f}", flush=True)
@@ -78,14 +89,16 @@ def create_system(
         # Only one cache exists for this protocol, so by default use the L1D
         # config parameters.
         #
-        cache = L1Cache(size=options.l1d_size, assoc=options.l1d_assoc,
-                        ruby_system=ruby_system)
+        cache = shared_online_cache
+        if cache is None:
+            cache = L1Cache(size=options.l1d_size, assoc=options.l1d_assoc,
+                            ruby_system=ruby_system)
 
         #
         # Only one unified L1 cache exists.  Can cache instructions and data.
         #
         l1_cntrl = L1Cache_Controller(
-            version=i, cacheMemory=cache, ruby_system=ruby_system
+            version=i, ruby_system=ruby_system
         )
 
         cpu_seq = RubySequencer(
