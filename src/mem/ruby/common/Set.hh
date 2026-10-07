@@ -62,18 +62,14 @@ class RubyDynamicBitset
   public:
     RubyDynamicBitset() : m_size(0) {}
 
-    explicit RubyDynamicBitset(std::size_t nbits) : m_size(nbits)
-    {
-        if (nbits)
-            m_words = std::make_shared<Words>(wordsFor(nbits), 0);
-    }
+    explicit RubyDynamicBitset(std::size_t nbits) : m_size(nbits) {}
 
     std::size_t size() const { return m_size; }
 
     bool test(std::size_t pos) const
     {
         checkBounds(pos);
-        return (words()[wordIdx(pos)] >> bitIdx(pos)) & 1ULL;
+        return m_words && ((*m_words)[wordIdx(pos)] >> bitIdx(pos)) & 1ULL;
     }
 
     // std::bitset-compatible proxy: `bits[i]` returns the bit at i.
@@ -113,6 +109,8 @@ class RubyDynamicBitset
     void set(std::size_t pos, bool value = true)
     {
         checkBounds(pos);
+        if (!value && !m_words)
+            return;
         std::uint64_t mask = 1ULL << bitIdx(pos);
         auto &data = writableWords();
         if (value)
@@ -128,13 +126,14 @@ class RubyDynamicBitset
 
     void reset()
     {
-        for (auto &w : writableWords()) w = 0ULL;
+        m_words.reset();
     }
 
     void reset(std::size_t pos)
     {
         checkBounds(pos);
-        writableWords()[wordIdx(pos)] &= ~(1ULL << bitIdx(pos));
+        if (m_words)
+            writableWords()[wordIdx(pos)] &= ~(1ULL << bitIdx(pos));
     }
 
     bool none() const
@@ -152,7 +151,13 @@ class RubyDynamicBitset
 
     bool operator==(const RubyDynamicBitset &other) const
     {
-        return m_size == other.m_size && words() == other.words();
+        if (m_size != other.m_size)
+            return false;
+        if (!m_words)
+            return other.none();
+        if (!other.m_words)
+            return none();
+        return words() == other.words();
     }
     bool operator!=(const RubyDynamicBitset &other) const
     {
@@ -162,20 +167,16 @@ class RubyDynamicBitset
     RubyDynamicBitset operator|(const RubyDynamicBitset &other) const
     {
         assert(m_size == other.m_size);
-        RubyDynamicBitset r(m_size);
-        auto &result = r.writableWords();
-        for (std::size_t i = 0; i < result.size(); ++i)
-            result[i] = words()[i] | other.words()[i];
+        RubyDynamicBitset r(*this);
+        r |= other;
         return r;
     }
 
     RubyDynamicBitset operator&(const RubyDynamicBitset &other) const
     {
         assert(m_size == other.m_size);
-        RubyDynamicBitset r(m_size);
-        auto &result = r.writableWords();
-        for (std::size_t i = 0; i < result.size(); ++i)
-            result[i] = words()[i] & other.words()[i];
+        RubyDynamicBitset r(*this);
+        r &= other;
         return r;
     }
 
@@ -184,13 +185,19 @@ class RubyDynamicBitset
         RubyDynamicBitset r(m_size);
         auto &result = r.writableWords();
         for (std::size_t i = 0; i < result.size(); ++i)
-            result[i] = ~words()[i];
+            result[i] = m_words ? ~words()[i] : ~0ULL;
         return r;
     }
 
     RubyDynamicBitset &operator|=(const RubyDynamicBitset &other)
     {
         assert(m_size == other.m_size);
+        if (!other.m_words)
+            return *this;
+        if (!m_words) {
+            m_words = other.m_words;
+            return *this;
+        }
         auto &data = writableWords();
         for (std::size_t i = 0; i < data.size(); ++i)
             data[i] |= other.words()[i];
@@ -200,6 +207,12 @@ class RubyDynamicBitset
     RubyDynamicBitset &operator&=(const RubyDynamicBitset &other)
     {
         assert(m_size == other.m_size);
+        if (!other.m_words) {
+            reset();
+            return *this;
+        }
+        if (!m_words)
+            return *this;
         auto &data = writableWords();
         for (std::size_t i = 0; i < data.size(); ++i)
             data[i] &= other.words()[i];
@@ -209,12 +222,14 @@ class RubyDynamicBitset
     void resize(std::size_t nbits)
     {
         m_size = nbits;
-        m_words = nbits ? std::make_shared<Words>(wordsFor(nbits), 0) : nullptr;
+        m_words.reset();
     }
 
     bool intersects(const RubyDynamicBitset &other) const
     {
         assert(m_size == other.m_size);
+        if (!m_words || !other.m_words)
+            return false;
         for (std::size_t i = 0; i < words().size(); ++i)
             if (words()[i] & other.words()[i])
                 return true;
@@ -245,7 +260,7 @@ class RubyDynamicBitset
     Words &writableWords()
     {
         if (!m_words)
-            m_words = std::make_shared<Words>();
+            m_words = std::make_shared<Words>(wordsFor(m_size), 0);
         else if (!m_words.unique())
             m_words = std::make_shared<Words>(*m_words);
         return *m_words;
@@ -279,6 +294,7 @@ class RubyDynamicBitset
     }
 
     std::size_t m_size;
+    // A null backing array represents zero bits at the full logical size.
     // Copies retain value semantics: reads share immutable storage; every
     // mutator obtains an independent backing array before changing a word.
     std::shared_ptr<Words> m_words;
