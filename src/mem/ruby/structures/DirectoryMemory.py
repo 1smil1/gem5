@@ -46,6 +46,8 @@ class RubyDirectoryMemory(SimObject):
     cxx_class = "gem5::ruby::DirectoryMemory"
     cxx_header = "mem/ruby/structures/DirectoryMemory.hh"
 
+    lazy_entries = Param.Bool(False, "Allocate the empty entry table on first insertion")
+
     addr_ranges = VectorParam.AddrRange(
         Parent.addr_ranges, "Address range this directory responds to"
     )

@@ -56,7 +56,8 @@ namespace ruby
 {
 
 DirectoryMemory::DirectoryMemory(const Params &p)
-    : SimObject(p), addrRanges(p.addr_ranges.begin(), p.addr_ranges.end())
+    : SimObject(p), m_entries(nullptr),
+      addrRanges(p.addr_ranges.begin(), p.addr_ranges.end())
 {
     m_size_bytes = 0;
     for (const auto &r: addrRanges) {
@@ -70,15 +71,14 @@ void
 DirectoryMemory::init()
 {
     m_num_entries = m_size_bytes / RubySystem::getBlockSizeBytes();
-    m_entries = new AbstractCacheEntry*[m_num_entries];
-    for (int i = 0; i < m_num_entries; i++)
-        m_entries[i] = NULL;
+    if (!static_cast<const Params &>(params()).lazy_entries)
+        m_entries = new AbstractCacheEntry*[m_num_entries]();
 }
 
 DirectoryMemory::~DirectoryMemory()
 {
     // free up all the directory entries
-    for (uint64_t i = 0; i < m_num_entries; i++) {
+    for (uint64_t i = 0; m_entries && i < m_num_entries; i++) {
         if (m_entries[i] != NULL) {
             delete m_entries[i];
         }
@@ -119,7 +119,8 @@ DirectoryMemory::lookup(Addr address)
 
     uint64_t idx = mapAddressToLocalIdx(address);
     assert(idx < m_num_entries);
-    return m_entries[idx];
+    // An untouched table contains only null entries; no cache entry is invented.
+    return m_entries ? m_entries[idx] : nullptr;
 }
 
 AbstractCacheEntry*
@@ -131,6 +132,8 @@ DirectoryMemory::allocate(Addr address, AbstractCacheEntry *entry)
 
     idx = mapAddressToLocalIdx(address);
     assert(idx < m_num_entries);
+    if (!m_entries)
+        m_entries = new AbstractCacheEntry*[m_num_entries]();
     assert(m_entries[idx] == NULL);
     entry->changePermission(AccessPermission_Read_Only);
     m_entries[idx] = entry;
@@ -147,6 +150,7 @@ DirectoryMemory::deallocate(Addr address)
 
     idx = mapAddressToLocalIdx(address);
     assert(idx < m_num_entries);
+    assert(m_entries != nullptr);
     assert(m_entries[idx] != NULL);
     delete m_entries[idx];
     m_entries[idx] = NULL;

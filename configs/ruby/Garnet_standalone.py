@@ -25,6 +25,7 @@
 # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+import os
 import m5
 from m5.objects import *
 from m5.defines import buildEnv
@@ -127,6 +128,10 @@ def create_system(
     if rom_dir_cntrl_node is not None:
         dir_cntrl_nodes.append(rom_dir_cntrl_node)
     for dir_cntrl in dir_cntrl_nodes:
+        dir_cntrl.directory.lazy_entries = (
+            getattr(options, "online_control", False)
+            and os.environ.get("OMELET_COMM_DUMP_STATS") == "0"
+        )
         # Connect the directory controllers and the network
         dir_cntrl.requestToDir = MessageBuffer()
         dir_cntrl.forwardToDir = MessageBuffer()
