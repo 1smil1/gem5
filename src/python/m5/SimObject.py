@@ -1087,9 +1087,8 @@ class SimObject(object, metaclass=MetaSimObject):
         return self
 
     def unproxyParams(self):
-        # ponytail: scan only instance values/references; walking every class
-        # descriptor for each object dominates multi-million-object setups.
-        for param, value in self._values.items():
+        for param in self._params.keys():
+            value = self._values.get(param)
             if value != None and isproxy(value):
                 try:
                     value = value.unproxy(self)
@@ -1103,8 +1102,12 @@ class SimObject(object, metaclass=MetaSimObject):
 
         # Unproxy ports in sorted order so that 'append' operations on
         # vector ports are done in a deterministic fashion.
-        for port_name in sorted(self._port_refs):
-            self._port_refs[port_name].unproxy(self)
+        port_names = list(self._ports.keys())
+        port_names.sort()
+        for port_name in port_names:
+            port = self._port_refs.get(port_name)
+            if port != None:
+                port.unproxy(self)
 
     def print_ini(self, ini_file):
         print("[" + self.path() + "]", file=ini_file)  # .ini section header

@@ -143,6 +143,17 @@ for ruby_port in system.ruby._cpu_ports:
 root = Root(full_system=False, system=system)
 root.system.mem_mode = "timing"
 
+# Resolve Parent.any system references after Root owns the System.  Assigning
+# them while the System is still orphaned would implicitly make the System a
+# child of each controller and create a parent cycle.
+for cpu in cpus:
+    cpu.system = system
+for sequencer in system.ruby._cpu_ports:
+    sequencer.system = system
+for child in list(system.ruby._children.values()):
+    if "system" in child._params:
+        child.system = system
+
 m5.ticks.setGlobalFrequency("1ps")
 
 init_progress("m5.instantiate: creating C++ objects, connecting ports and initializing network")
