@@ -157,7 +157,10 @@ def setup_memory_controllers(system, ruby, dir_cntrls, options):
 
     if online_network_only:
         # RubyPort still needs physical ranges to classify normal requests.
-        system.online_memory = [SimpleMemory(range=r) for r in system.mem_ranges]
+        # Garnet_standalone drains network messages without reading memory
+        # contents. Retain each memory object and its address map, but use the
+        # native null-memory mode so PhysicalMemory allocates no backing store.
+        system.online_memory = [SimpleMemory(range=r, null=True) for r in system.mem_ranges]
     else:
         system.mem_ctrls = mem_ctrls
 
