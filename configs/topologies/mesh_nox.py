@@ -83,6 +83,15 @@ class mesh_nox(SimpleTopology):
             if chiplet_i % 100 == 0:
                 progress(f"NoC routers and endpoint links {chiplet_i}/{num_chiplets}")
             num_routers = noc_routers_per_chiplet_list[role]
+            # All routers and endpoint links in one chiplet use the same
+            # configured clock.  Reuse one domain instead of constructing a
+            # duplicate clock/voltage SimObject for every port.
+            chiplet_clk_domain = SrcClockDomain(
+                clock=self.sys_cfg["chiplet_clock"],
+                voltage_domain=VoltageDomain(
+                    voltage=self.sys_cfg["sys_voltage"]
+                ),
+            )
 
             for _ in range(num_routers):
                 chiplet_rtr_lat = self.sys_cfg["router_latency"]["chiplets"][role]
@@ -94,10 +103,6 @@ class mesh_nox(SimpleTopology):
 
 
                 router_map[role].append(curr_router_id)
-                chiplet_clk_domain = SrcClockDomain(
-                    clock = self.sys_cfg["chiplet_clock"],
-                    voltage_domain = VoltageDomain(
-                    voltage = self.sys_cfg["sys_voltage"]))
                 noc_routers[curr_router_id].clk_domain = chiplet_clk_domain
                 ext_links.append(ExtLink(link_id=link_cnt,
                                         ext_node=nodes[curr_router_id],
@@ -109,10 +114,6 @@ class mesh_nox(SimpleTopology):
                 noc_routers[curr_router_id].vcs_per_vnet = vcs_count
                 link_cnt += 1
 
-                chiplet_clk_domain = SrcClockDomain(
-                    clock = self.sys_cfg["chiplet_clock"],
-                    voltage_domain = VoltageDomain(
-                    voltage = self.sys_cfg["sys_voltage"]))
                 ext_links.append(ExtLink(link_id=link_cnt,
                                         ext_node=nodes[total_cpus + curr_router_id],
                                         int_node=noc_routers[curr_router_id],
