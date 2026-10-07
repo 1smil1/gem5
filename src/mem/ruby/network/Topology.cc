@@ -327,28 +327,17 @@ Topology::createLinks(Network *net)
     }
     RouteDigester marking_digest;
 
-    // Build compact route bits while computing one destination at a time.
-    // The old implementation retained vnets * switches * switches ints.
-    // RouteBits retains only the final per-link destination sets and releases
-    // each packed entry immediately after makeLink copies it into Garnet.
-    struct RouteBits {
-        int vnets;
-        int words;
-        std::vector<uint64_t> bits;
-        RouteBits(int v, int w) : vnets(v), words(w), bits(v * w, 0) {}
-        void add(int v, int d) { bits[v * words + d / 64] |= 1ULL << (d % 64); }
-        bool test(int v, int d) const
-        { return (bits[v * words + d / 64] >> (d % 64)) & 1ULL; }
-        void clear() { std::vector<uint64_t>().swap(bits); }
-    };
+    // Fill the same NetDest representation that Garnet keeps in each router.
+    // This avoids scanning and converting a second route format at makeLink().
     struct RouteEdge { int src; int dst; int weight; int link; };
 
     const int total_links = static_cast<int>(m_link_map.size());
-    const int route_words = (m_nodes + 63) / 64;
+    uint64_t route_words = 0;
+    for (int type = 0; type < MachineType_NUM; ++type)
+        route_words += (MachineType_base_count((MachineType)type) + 63) / 64;
     const uint64_t route_bytes = static_cast<uint64_t>(total_links) *
-        static_cast<uint64_t>(m_vnets) * static_cast<uint64_t>(route_words) *
-        sizeof(uint64_t);
-    topologyInitProgress("packed route storage links=" +
+        static_cast<uint64_t>(m_vnets) * route_words * sizeof(uint64_t);
+    topologyInitProgress("route-table storage links=" +
         std::to_string(total_links) + " destinations=" +
         std::to_string(m_nodes) + " bytes=" + std::to_string(route_bytes) +
         " (~" + std::to_string(route_bytes / (1024.0 * 1024.0 * 1024.0)) +
@@ -357,10 +346,10 @@ Topology::createLinks(Network *net)
     link_keys.reserve(total_links);
     for (const auto &entry : m_link_map)
         link_keys.push_back(entry.first);
-    std::vector<RouteBits> route_bits;
-    route_bits.reserve(total_links);
+    std::vector<std::vector<NetDest>> routing_maps;
+    routing_maps.reserve(total_links);
     for (int i = 0; i < total_links; ++i)
-        route_bits.emplace_back(m_vnets, route_words);
+        routing_maps.emplace_back(m_vnets);
 
     std::vector<std::vector<RouteEdge>> route_edges(m_vnets);
     std::vector<std::vector<std::vector<std::pair<int, int>>>> reverse_adj(
@@ -433,8 +422,18 @@ Topology::createLinks(Network *net)
                 }
             }
             for (const RouteEdge &edge : route_edges[v]) {
-                if (edge.weight + distance[edge.dst] == distance[edge.src])
-                    route_bits[edge.link].add(v, d);
+                if (edge.weight + distance[edge.dst] != distance[edge.src])
+                    continue;
+                int remaining = d;
+                for (int type = 0; type < MachineType_NUM; ++type) {
+                    const int count = MachineType_base_count((MachineType)type);
+                    if (remaining < count) {
+                        routing_maps[edge.link][v].add(
+                            {(MachineType)type, static_cast<NodeID>(remaining)});
+                        break;
+                    }
+                    remaining -= count;
+                }
             }
             if (report_init_progress && (d % 1024 == 0 || d + 1 == m_nodes))
                 topologyInitProgress("reverse shortest paths vnet=" +
@@ -457,34 +456,20 @@ Topology::createLinks(Network *net)
             const int weight = topology_weights.get(v, i, j);
             if (weight > 0 && weight != INFINITE_LATENCY) {
                 realLink = true;
-                for (int d = 0; d < m_nodes; ++d) {
-                    if (!route_bits[link_index].test(v, d))
-                        continue;
-                    int remaining = d;
-                    for (int type = 0; type < MachineType_NUM; ++type) {
-                        const int count = MachineType_base_count((MachineType)type);
-                        if (remaining < count) {
-                            MachineID machine = {(MachineType)type,
-                                                 static_cast<NodeID>(remaining)};
-                            routingMap[v].add(machine);
-                            break;
-                        }
-                        remaining -= count;
-                    }
-                }
                 if (digest_routes) {
                     marking_digest.mixInt(i);
                     marking_digest.mixInt(j);
                     marking_digest.mixInt(v);
-                    for (NodeID d : routingMap[v].getAllDest())
+                    for (NodeID d : routing_maps[link_index][v].getAllDest())
                         marking_digest.mixInt(static_cast<int>(d));
                     marking_digest.mixInt(0x40000000);
                 }
+                routingMap[v] = routing_maps[link_index][v];
             }
         }
         if (realLink)
             makeLink(net, i, j, routingMap);
-        route_bits[link_index].clear();
+        std::vector<NetDest>().swap(routing_maps[link_index]);
         ++link_index;
     }
     topologyRouteDigest("marking", marking_digest.h);
