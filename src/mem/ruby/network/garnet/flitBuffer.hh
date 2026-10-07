@@ -32,7 +32,9 @@
 #define __MEM_RUBY_NETWORK_GARNET_0_FLITBUFFER_HH__
 
 #include <algorithm>
+#include <deque>
 #include <iostream>
+#include <optional>
 #include <vector>
 
 #include "mem/ruby/network/garnet/CommonTypes.hh"
@@ -58,33 +60,37 @@ class flitBuffer
     void print(std::ostream& out) const;
     bool isFull();
     void setMaxSize(int maximum);
-    int getSize() const { return m_buffer.size(); }
+    int getSize() const { return m_buffer ? m_buffer->size() : 0; }
 
     flit *
     getTopFlit()
     {
-        flit *f = m_buffer.front();
-        m_buffer.pop_front();
+        flit *f = m_buffer->front();
+        m_buffer->pop_front();
         return f;
     }
 
     flit *
     peekTopFlit()
     {
-        return m_buffer.front();
+        return m_buffer->front();
     }
 
     void
     insert(flit *flt)
     {
-        m_buffer.push_back(flt);
+        if (!m_buffer)
+            m_buffer.emplace();
+        m_buffer->push_back(flt);
     }
 
     bool functionalRead(Packet *pkt, WriteMask &mask);
     uint32_t functionalWrite(Packet *pkt);
 
   private:
-    std::deque<flit *> m_buffer;
+    // Empty VCs/links need no deque backing allocation. Retain the deque after
+    // first use so repeated traffic does not repeatedly allocate its storage.
+    std::optional<std::deque<flit *>> m_buffer;
     int max_size;
 };
 

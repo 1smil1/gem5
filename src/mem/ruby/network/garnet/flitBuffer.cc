@@ -53,13 +53,13 @@ flitBuffer::flitBuffer(int maximum_size)
 bool
 flitBuffer::isEmpty()
 {
-    return (m_buffer.size() == 0);
+    return !m_buffer || m_buffer->empty();
 }
 
 bool
 flitBuffer::isReady(Tick curTime)
 {
-    if (m_buffer.size() != 0 ) {
+    if (!isEmpty()) {
         flit *t_flit = peekTopFlit();
         if (t_flit->get_time() <= curTime)
             return true;
@@ -70,13 +70,14 @@ flitBuffer::isReady(Tick curTime)
 void
 flitBuffer::print(std::ostream& out) const
 {
-    out << "[flitBuffer: " << m_buffer.size() << "] " << std::endl;
+    out << "[flitBuffer: " << getSize() << "] " << std::endl;
 }
 
 bool
 flitBuffer::isFull()
 {
-    return (m_buffer.size() >= max_size);
+    const auto size = m_buffer ? m_buffer->size() : 0;
+    return size >= max_size;
 }
 
 void
@@ -89,8 +90,10 @@ bool
 flitBuffer::functionalRead(Packet *pkt, WriteMask &mask)
 {
     bool read = false;
-    for (unsigned int i = 0; i < m_buffer.size(); ++i) {
-        if (m_buffer[i]->functionalRead(pkt, mask)) {
+    if (!m_buffer)
+        return read;
+    for (auto *flt : *m_buffer) {
+        if (flt->functionalRead(pkt, mask)) {
             read = true;
         }
     }
@@ -102,9 +105,10 @@ uint32_t
 flitBuffer::functionalWrite(Packet *pkt)
 {
     uint32_t num_functional_writes = 0;
-
-    for (unsigned int i = 0; i < m_buffer.size(); ++i) {
-        if (m_buffer[i]->functionalWrite(pkt)) {
+    if (!m_buffer)
+        return num_functional_writes;
+    for (auto *flt : *m_buffer) {
+        if (flt->functionalWrite(pkt)) {
             num_functional_writes++;
         }
     }
