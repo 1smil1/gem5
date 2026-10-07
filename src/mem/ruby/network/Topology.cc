@@ -434,6 +434,17 @@ Topology::createLinks(Network *net)
         std::vector<int> distance(num_switches, INFINITE_LATENCY);
         std::array<std::deque<Edge>, 3> buckets;
         for (int d = 0; d < m_nodes; ++d) {
+            // Decode once per destination, not once for every selected edge.
+            int remaining = d;
+            int type = 0;
+            for (; type < MachineType_NUM; ++type) {
+                const int count = MachineType_base_count((MachineType)type);
+                if (remaining < count)
+                    break;
+                remaining -= count;
+            }
+            fatal_if(type == MachineType_NUM, "Invalid topology destination %d", d);
+            const MachineID destination{(MachineType)type, static_cast<NodeID>(remaining)};
             const int target = m_nodes + d;
             std::fill(distance.begin(), distance.end(), INFINITE_LATENCY);
             distance[target] = 0;
@@ -482,16 +493,7 @@ Topology::createLinks(Network *net)
             for (const RouteEdge &edge : route_edges[v]) {
                 if (edge.weight + distance[edge.dst] != distance[edge.src])
                     continue;
-                int remaining = d;
-                for (int type = 0; type < MachineType_NUM; ++type) {
-                    const int count = MachineType_base_count((MachineType)type);
-                    if (remaining < count) {
-                        routing_maps[edge.link][v].add(
-                            {(MachineType)type, static_cast<NodeID>(remaining)});
-                        break;
-                    }
-                    remaining -= count;
-                }
+                routing_maps[edge.link][v].add(destination);
             }
             if (report_init_progress && (d % 1024 == 0 || d + 1 == m_nodes))
                 topologyInitProgress("reverse shortest paths vnet=" +
