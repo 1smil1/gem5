@@ -439,7 +439,9 @@ OnlineWorkloadController::run(const std::string &manifest,
     std::vector<uint64_t> resourceRelease(numResources, 0);
     std::unordered_map<int, int> runRemaining;
     std::unordered_map<int, int> runPhase;
+    std::unordered_map<int, size_t> runIndex;
     std::vector<Run> runs;
+    std::vector<int> inputRemaining(numInputs, 0);
     std::vector<uint64_t> inputFirst(numInputs, 0);
     std::vector<uint64_t> inputDone(numInputs, 0);
     uint64_t tick = 0;
@@ -478,6 +480,9 @@ OnlineWorkloadController::run(const std::string &manifest,
         return it->second;
     };
 
+    for (const Phase &phase : phases)
+        ++inputRemaining[phase.input];
+
     auto markDone = [&](int index, uint64_t doneTick) {
         Phase &phase = phases[index];
         if (phase.status == 3)
@@ -491,11 +496,7 @@ OnlineWorkloadController::run(const std::string &manifest,
         }
         for (const int dependent : dependents[index])
             --phases[dependent].remainingDeps;
-        bool complete = true;
-        for (const Phase &candidate : phases)
-            if (candidate.input == phase.input && candidate.status != 3)
-                complete = false;
-        if (complete && inputDone[phase.input] == 0)
+        if (--inputRemaining[phase.input] == 0 && inputDone[phase.input] == 0)
             inputDone[phase.input] = phase.commEnd;
     };
 
@@ -517,8 +518,7 @@ OnlineWorkloadController::run(const std::string &manifest,
             if (runRemaining[run] == 0) {
                 const int phase = runPhase.at(run);
                 phases[phase].commEnd = arrival.tick;
-                for (Run &record : runs)
-                    if (record.id == run) { record.finishTick = arrival.tick; break; }
+                runs.at(runIndex.at(run)).finishTick = arrival.tick;
                 markDone(phase, arrival.tick);
             }
         }
@@ -542,6 +542,7 @@ OnlineWorkloadController::run(const std::string &manifest,
             const int run = nextRunId++;
             runPhase[run] = static_cast<int>(i);
             runRemaining[run] = 0;
+            runIndex[run] = runs.size();
             runs.push_back(Run{run, static_cast<int>(i), phase.group, phase.input, tick, 0, 0, 0});
             if (inputFirst[phase.input] == 0)
                 inputFirst[phase.input] = tick;
