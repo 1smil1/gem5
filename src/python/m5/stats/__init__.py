@@ -37,6 +37,8 @@
 # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+import os
+
 import m5
 
 import _m5.stats
@@ -326,6 +328,14 @@ def enable():
         if not (stat.flags & flags.display):
             stat.name = "__Stat%06d" % stat.id
 
+    # Online communication runs do not dump gem5's detailed statistics unless
+    # debug is enabled.  VectorInfo::enable() only allocates display metadata
+    # (subnames/subdescs); it is not used by routing or packet timing.  Keep
+    # all validation and the global statistics switch, but avoid that metadata
+    # allocation for the normal no-dump path.  Debug runs retain gem5's
+    # original behavior and output.
+    minimal_online_stats = os.environ.get("OMELET_COMM_DUMP_STATS") == "0"
+
     # Legacy stat
     global stats_list
     stats_list = list(_m5.stats.statsList())
@@ -336,11 +346,13 @@ def enable():
     stats_list.sort(key=lambda s: s.name.split("."))
     for stat in stats_list:
         stats_dict[stat.name] = stat
-        stat.enable()
+        if not minimal_online_stats:
+            stat.enable()
 
     # New stats
     _visit_stats(check_stat)
-    _visit_stats(lambda g, s: s.enable())
+    if not minimal_online_stats:
+        _visit_stats(lambda g, s: s.enable())
 
     _m5.stats.enable()
 
