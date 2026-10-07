@@ -350,8 +350,10 @@ Topology::createLinks(Network *net)
         link_keys.push_back(entry.first);
     std::vector<std::vector<NetDest>> routing_maps;
     routing_maps.reserve(total_links);
-    for (int i = 0; i < total_links; ++i)
-        routing_maps.emplace_back(m_vnets);
+    for (int i = 0; i < total_links; ++i) {
+        routing_maps.emplace_back();
+        routing_maps.back().reserve(m_vnets);
+    }
 
     std::vector<std::vector<RouteEdge>> route_edges(m_vnets);
     std::vector<int> maximum_weight(m_vnets, 0);
@@ -406,6 +408,24 @@ Topology::createLinks(Network *net)
         std::to_string(m_nodes));
     const bool report_init_progress = std::getenv("OMELET_INIT_PROGRESS");
     for (int v = 0; v < m_vnets; ++v) {
+        int identical_vnet = -1;
+        for (int earlier = 0; earlier < v; ++earlier) {
+            if (reverse_adj[v] == reverse_adj[earlier]) {
+                identical_vnet = earlier;
+                break;
+            }
+        }
+        if (identical_vnet >= 0) {
+            for (auto &routes : routing_maps)
+                routes.push_back(routes[identical_vnet]);
+            topologyInitProgress("reverse shortest paths vnet=" +
+                std::to_string(v + 1) + "/" + std::to_string(m_vnets) +
+                " identical graph; shared routes from vnet=" +
+                std::to_string(identical_vnet + 1));
+            continue;
+        }
+        for (auto &routes : routing_maps)
+            routes.emplace_back();
         const bool bounded_weights = maximum_weight[v] <= 2;
         topologyInitProgress("reverse shortest paths vnet=" +
             std::to_string(v + 1) + "/" + std::to_string(m_vnets) +

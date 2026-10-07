@@ -41,6 +41,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
+#include <memory>
 #include <vector>
 
 #include "base/logging.hh"
@@ -63,7 +64,8 @@ class RubyDynamicBitset
 
     explicit RubyDynamicBitset(std::size_t nbits) : m_size(nbits)
     {
-        m_words.resize(wordsFor(nbits), 0);
+        if (nbits)
+            m_words = std::make_shared<Words>(wordsFor(nbits), 0);
     }
 
     std::size_t size() const { return m_size; }
@@ -71,7 +73,7 @@ class RubyDynamicBitset
     bool test(std::size_t pos) const
     {
         checkBounds(pos);
-        return (m_words[wordIdx(pos)] >> bitIdx(pos)) & 1ULL;
+        return (words()[wordIdx(pos)] >> bitIdx(pos)) & 1ULL;
     }
 
     // std::bitset-compatible proxy: `bits[i]` returns the bit at i.
@@ -112,44 +114,45 @@ class RubyDynamicBitset
     {
         checkBounds(pos);
         std::uint64_t mask = 1ULL << bitIdx(pos);
+        auto &data = writableWords();
         if (value)
-            m_words[wordIdx(pos)] |= mask;
+            data[wordIdx(pos)] |= mask;
         else
-            m_words[wordIdx(pos)] &= ~mask;
+            data[wordIdx(pos)] &= ~mask;
     }
 
     void set()
     {
-        for (auto &w : m_words) w = ~0ULL;
+        for (auto &w : writableWords()) w = ~0ULL;
     }
 
     void reset()
     {
-        for (auto &w : m_words) w = 0ULL;
+        for (auto &w : writableWords()) w = 0ULL;
     }
 
     void reset(std::size_t pos)
     {
         checkBounds(pos);
-        m_words[wordIdx(pos)] &= ~(1ULL << bitIdx(pos));
+        writableWords()[wordIdx(pos)] &= ~(1ULL << bitIdx(pos));
     }
 
     bool none() const
     {
-        for (auto w : m_words) if (w) return false;
+        for (auto w : words()) if (w) return false;
         return true;
     }
 
     std::size_t count() const
     {
         std::size_t total = 0;
-        for (auto w : m_words) total += popcount(w);
+        for (auto w : words()) total += popcount(w);
         return total;
     }
 
     bool operator==(const RubyDynamicBitset &other) const
     {
-        return m_size == other.m_size && m_words == other.m_words;
+        return m_size == other.m_size && words() == other.words();
     }
     bool operator!=(const RubyDynamicBitset &other) const
     {
@@ -160,8 +163,9 @@ class RubyDynamicBitset
     {
         assert(m_size == other.m_size);
         RubyDynamicBitset r(m_size);
-        for (std::size_t i = 0; i < m_words.size(); ++i)
-            r.m_words[i] = m_words[i] | other.m_words[i];
+        auto &result = r.writableWords();
+        for (std::size_t i = 0; i < result.size(); ++i)
+            result[i] = words()[i] | other.words()[i];
         return r;
     }
 
@@ -169,39 +173,52 @@ class RubyDynamicBitset
     {
         assert(m_size == other.m_size);
         RubyDynamicBitset r(m_size);
-        for (std::size_t i = 0; i < m_words.size(); ++i)
-            r.m_words[i] = m_words[i] & other.m_words[i];
+        auto &result = r.writableWords();
+        for (std::size_t i = 0; i < result.size(); ++i)
+            result[i] = words()[i] & other.words()[i];
         return r;
     }
 
     RubyDynamicBitset operator~() const
     {
         RubyDynamicBitset r(m_size);
-        for (std::size_t i = 0; i < m_words.size(); ++i)
-            r.m_words[i] = ~m_words[i];
+        auto &result = r.writableWords();
+        for (std::size_t i = 0; i < result.size(); ++i)
+            result[i] = ~words()[i];
         return r;
     }
 
     RubyDynamicBitset &operator|=(const RubyDynamicBitset &other)
     {
         assert(m_size == other.m_size);
-        for (std::size_t i = 0; i < m_words.size(); ++i)
-            m_words[i] |= other.m_words[i];
+        auto &data = writableWords();
+        for (std::size_t i = 0; i < data.size(); ++i)
+            data[i] |= other.words()[i];
         return *this;
     }
 
     RubyDynamicBitset &operator&=(const RubyDynamicBitset &other)
     {
         assert(m_size == other.m_size);
-        for (std::size_t i = 0; i < m_words.size(); ++i)
-            m_words[i] &= other.m_words[i];
+        auto &data = writableWords();
+        for (std::size_t i = 0; i < data.size(); ++i)
+            data[i] &= other.words()[i];
         return *this;
     }
 
     void resize(std::size_t nbits)
     {
         m_size = nbits;
-        m_words.assign(wordsFor(nbits), 0);
+        m_words = nbits ? std::make_shared<Words>(wordsFor(nbits), 0) : nullptr;
+    }
+
+    bool intersects(const RubyDynamicBitset &other) const
+    {
+        assert(m_size == other.m_size);
+        for (std::size_t i = 0; i < words().size(); ++i)
+            if (words()[i] & other.words()[i])
+                return true;
+        return false;
     }
 
     friend std::ostream &operator<<(std::ostream &out,
@@ -217,6 +234,23 @@ class RubyDynamicBitset
     }
 
   private:
+    using Words = std::vector<std::uint64_t>;
+
+    const Words &words() const
+    {
+        static const Words empty;
+        return m_words ? *m_words : empty;
+    }
+
+    Words &writableWords()
+    {
+        if (!m_words)
+            m_words = std::make_shared<Words>();
+        else if (!m_words.unique())
+            m_words = std::make_shared<Words>(*m_words);
+        return *m_words;
+    }
+
     static constexpr std::size_t kBitsPerWord = 64;
 
     static std::size_t wordsFor(std::size_t nbits)
@@ -245,7 +279,9 @@ class RubyDynamicBitset
     }
 
     std::size_t m_size;
-    std::vector<std::uint64_t> m_words;
+    // Copies retain value semantics: reads share immutable storage; every
+    // mutator obtains an independent backing array before changing a word.
+    std::shared_ptr<Words> m_words;
 };
 
 class Set
@@ -356,8 +392,7 @@ class Set
     bool
     intersectionIsEmpty(const Set& obj) const
     {
-        RubyDynamicBitset r = bits & obj.bits;
-        return r.none();
+        return !bits.intersects(obj.bits);
     }
 
     /*
