@@ -194,7 +194,10 @@ if args.online_control:
     m5.stats.enable = enable_stats_with_progress
 
 if args.online_control and os.environ.get("OMELET_COMM_DUMP_STATS") == "0":
-    # config.ini also registers SimObjects; keep it. JSON/DOT are debug copies.
+    # The online controller does not consume gem5's object dump. Keep the
+    # SimObjects and instantiate passes, but avoid serializing a large debug
+    # file for the normal non-debug communication path.
+    m5.options.dump_config = ""
     m5.options.json_config = ""
     m5.options.dot_config = ""
     m5.options.dot_dvfs_config = ""
