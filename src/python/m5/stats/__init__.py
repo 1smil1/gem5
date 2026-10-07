@@ -276,34 +276,37 @@ def _visit_stats(visitor, root=None):
     _visit_groups(for_each_stat, root=root)
 
 
-def _bindStatHierarchy(root):
-    def _bind_obj(name, obj):
+def _bindStatHierarchy(root, stat_parent=None):
+    def _bind_obj(name, obj, stat_parent):
         if isNullPointer(obj):
             return
         if m5.SimObject.isSimObjectVector(obj):
             if len(obj) == 1:
-                _bind_obj(name, obj[0])
+                _bind_obj(name, obj[0], stat_parent)
             else:
                 for idx, obj in enumerate(obj):
-                    _bind_obj("{}{}".format(name, idx), obj)
+                    _bind_obj("{}{}".format(name, idx), obj, stat_parent)
         else:
             # We need this check because not all obj.getCCObject() is an
             # instance of Stat::Group. For example, sc_core::sc_module, the C++
             # class of SystemC_ScModule, is not a subclass of Stat::Group. So
             # it will cause a type error if obj is a SystemC_ScModule when
             # calling addStatGroup().
-            if isinstance(obj.getCCObject(), _m5.stats.Group):
-                parent = root
-                while parent:
-                    if hasattr(parent, "addStatGroup"):
-                        parent.addStatGroup(name, obj.getCCObject())
-                        break
-                    parent = parent.get_parent()
+            cc_obj = obj.getCCObject()
+            next_parent = stat_parent
+            if isinstance(cc_obj, _m5.stats.Group):
+                if stat_parent is not None:
+                    stat_parent.addStatGroup(name, cc_obj)
+                next_parent = cc_obj
 
-            _bindStatHierarchy(obj)
+            _bindStatHierarchy(obj, next_parent)
 
+    if stat_parent is None:
+        root_cc_obj = root.getCCObject()
+        if isinstance(root_cc_obj, _m5.stats.Group):
+            stat_parent = root_cc_obj
     for name, obj in root._children.items():
-        _bind_obj(name, obj)
+        _bind_obj(name, obj, stat_parent)
 
 
 names = []
