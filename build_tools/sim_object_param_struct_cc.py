@@ -200,6 +200,23 @@ py::module_ m = m_internal.def_submodule("param_${sim_object}");
     code.indent()
     for exp in sim_object.cxx_exports:
         exp.export(code, sim_object.cxx_class)
+    # Bind inherited lifecycle calls using the concrete Python object's type.
+    # Casting every object through SimObject's multiple-inheritance registry
+    # repeatedly searches unrelated classes. The C++ base cast below still
+    # dispatches the original virtual method, with the proper pointer adjustment.
+    ancestor = sim_object
+    while ancestor and ancestor.cxx_class != "gem5::SimObject":
+        if "cxx_base" in ancestor._value_dict:
+            break  # A Python base need not be a C++ base (e.g. SystemC).
+        ancestor = ancestor._base
+    if ancestor and ancestor.cxx_class == "gem5::SimObject":
+        exported = {exp.name for exp in sim_object.cxx_exports}
+        for method in ("init", "initState", "regProbePoints", "regProbeListeners", "startup"):
+            if method not in exported:
+                code(
+                    '.def("${method}", [](${{sim_object.cxx_class}} &obj) { '
+                    'static_cast<gem5::SimObject &>(obj).${method}(); })'
+                )
     code(";")
     code.dedent()
     code()
