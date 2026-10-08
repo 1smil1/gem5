@@ -339,7 +339,7 @@ Topology::createLinks(Network *net)
         route_words += (MachineType_base_count((MachineType)type) + 63) / 64;
     const uint64_t route_bytes = static_cast<uint64_t>(total_links) *
         static_cast<uint64_t>(m_vnets) * route_words * sizeof(uint64_t);
-    topologyInitProgress("route-table storage links=" +
+    topologyInitProgress("unshared route-table backing upper-bound links=" +
         std::to_string(total_links) + " destinations=" +
         std::to_string(m_nodes) + " bytes=" + std::to_string(route_bytes) +
         " (~" + std::to_string(route_bytes / (1024.0 * 1024.0 * 1024.0)) +
@@ -366,7 +366,12 @@ Topology::createLinks(Network *net)
             const int weight = topology_weights.get(v, src, dst);
             if (weight > 0 && weight != INFINITE_LATENCY) {
                 maximum_weight[v] = std::max(maximum_weight[v], weight);
-                route_edges[v].push_back({src, dst, weight, i});
+                // Both GarnetNetwork and SimpleNetwork ignore route masks in
+                // makeExtInLink(): injection has no output-port choice here.
+                // Retain the edge in shortest paths and create the real link;
+                // only the unused mask is omitted outside full digest checks.
+                if (digest_routes || src >= m_nodes)
+                    route_edges[v].push_back({src, dst, weight, i});
                 reverse_adj[v][dst].push_back({src, weight});
             }
         }
