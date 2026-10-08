@@ -28,10 +28,26 @@
 
 #include <gtest/gtest-spi.h>
 #include <gtest/gtest.h>
+#include <cstdlib>
 
 #include "base/stats/info.hh"
 
 using namespace gem5;
+
+TEST(StatsInfoTest, DescriptionExportPolicy)
+{
+    const char *previous = std::getenv("OMELET_COMM_DUMP_STATS");
+    const bool present = previous != nullptr;
+    const std::string saved = present ? previous : "";
+    EXPECT_EQ(setenv("OMELET_COMM_DUMP_STATS", "0", 1), 0);
+    EXPECT_FALSE(statistics::Info::retainDescriptions());
+    EXPECT_EQ(setenv("OMELET_COMM_DUMP_STATS", "1", 1), 0);
+    EXPECT_TRUE(statistics::Info::retainDescriptions());
+    EXPECT_EQ(unsetenv("OMELET_COMM_DUMP_STATS"), 0);
+    EXPECT_TRUE(statistics::Info::retainDescriptions());
+    if (present)
+        EXPECT_EQ(setenv("OMELET_COMM_DUMP_STATS", saved.c_str(), 1), 0);
+}
 
 class TestInfo : public statistics::Info
 {

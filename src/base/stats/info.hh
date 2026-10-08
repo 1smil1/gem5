@@ -108,6 +108,9 @@ class Info
     Info();
     virtual ~Info();
 
+    // Only online runs explicitly disabling export omit display descriptions.
+    static bool retainDescriptions();
+
     /**
      * Set the name of this statistic. Special handling must be done when
      * creating an old-style statistic (i.e., stats without a parent group).

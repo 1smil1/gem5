@@ -268,16 +268,18 @@ class DataWrap : public InfoAccess
 
         info->unit = unit;
 
-        if (desc)
+        if (desc && Info::retainDescriptions())
             info->desc = desc;
 
         // Stat that does not belong to any statistics::Group is a legacy stat
-        std::string common_message = "Legacy stat is a stat that does not "
-            "belong to any statistics::Group. Legacy stat is deprecated.";
-        if (parent == nullptr && name != nullptr)
-            warn(csprintf("`%s` is a legacy stat. %s", name, common_message));
-        else if (parent == nullptr)
-            warn_once("One of the stats is a legacy stat. " + common_message);
+        if (parent == nullptr) {
+            std::string common_message = "Legacy stat is a stat that does not "
+                "belong to any statistics::Group. Legacy stat is deprecated.";
+            if (name != nullptr)
+                warn(csprintf("`%s` is a legacy stat. %s", name, common_message));
+            else
+                warn_once("One of the stats is a legacy stat. " + common_message);
+        }
     }
 
     /**
@@ -333,7 +335,8 @@ class DataWrap : public InfoAccess
     Derived &
     desc(const std::string &_desc)
     {
-        this->info()->desc = _desc;
+        if (Info::retainDescriptions())
+            this->info()->desc = _desc;
         return this->self();
     }
 
@@ -425,6 +428,8 @@ class DataWrapVec : public DataWrap<Derived, InfoProxyType>
     Derived &
     subdesc(off_type index, const std::string &desc)
     {
+        if (!Info::retainDescriptions())
+            return this->self();
         Info *info = this->info();
 
         std::vector<std::string> &subd = info->subdescs;

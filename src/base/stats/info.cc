@@ -42,6 +42,8 @@
 #include "base/stats/info.hh"
 
 #include <cctype>
+#include <cstdlib>
+#include <cstring>
 
 #include "base/cprintf.hh"
 #include "base/debug.hh"
@@ -79,6 +81,13 @@ Info::Info()
 
 Info::~Info()
 {
+}
+
+bool
+Info::retainDescriptions()
+{
+    const char *mode = std::getenv("OMELET_COMM_DUMP_STATS");
+    return !mode || std::strcmp(mode, "0") != 0;
 }
 
 StorageParams const*
