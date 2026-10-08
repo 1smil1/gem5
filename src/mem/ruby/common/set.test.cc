@@ -132,3 +132,36 @@ TEST(RubySetTest, SingletonAndDenseValueSemantics)
         }
     }
 }
+
+TEST(RubySetTest, OffsetWordRanges)
+{
+    std::minstd_rand random(20261009);
+    constexpr std::size_t size = 54752;
+    RubyDynamicBitset bits(size);
+    std::vector<bool> reference((size + 63) / 64 * 64, false);
+    for (int step = 0; step < 100; ++step) {
+        const auto pos = step % 2 ? random() % size : size - 1 - step;
+        bits.set(pos);
+        reference[pos] = true;
+        check(bits, reference, size);
+        auto copy = bits;
+        copy.reset(pos);
+        auto expected = reference;
+        expected[pos] = false;
+        check(copy, expected, size);
+        RubyDynamicBitset other(size);
+        other.set(pos);
+        other.set((pos + 65) % size);
+        auto intersection = bits & other;
+        auto combined = bits | other;
+        for (std::size_t i = 0; i < reference.size(); ++i) {
+            const bool present = i == pos || i == (pos + 65) % size;
+            expected[i] = reference[i] && present;
+        }
+        check(intersection, expected, size);
+        expected = reference;
+        expected[pos] = true;
+        expected[(pos + 65) % size] = true;
+        check(combined, expected, size);
+    }
+}

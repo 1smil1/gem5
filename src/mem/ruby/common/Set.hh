@@ -37,6 +37,7 @@
 #ifndef __MEM_RUBY_COMMON_SET_HH__
 #define __MEM_RUBY_COMMON_SET_HH__
 
+#include <algorithm>
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
@@ -70,9 +71,9 @@ class RubyDynamicBitset
     bool test(std::size_t pos) const
     {
         checkBounds(pos);
-        if (m_single != noBit)
-            return m_single == pos;
-        return m_words && ((*m_words)[wordIdx(pos)] >> bitIdx(pos)) & 1ULL;
+        if (hasSingleton())
+            return m_index == pos;
+        return (wordAt(wordIdx(pos)) >> bitIdx(pos)) & 1ULL;
     }
 
     // std::bitset-compatible proxy: `bits[i]` returns the bit at i.
@@ -114,21 +115,24 @@ class RubyDynamicBitset
         checkBounds(pos);
         if (!m_words) {
             if (!value) {
-                if (m_single == pos)
-                    m_single = noBit;
+                if (m_index == pos)
+                    m_index = noBit;
                 return;
             }
-            if (m_single == noBit || m_single == pos) {
-                m_single = pos;
+            if (m_index == noBit || m_index == pos) {
+                m_index = pos;
                 return;
             }
         }
+        const auto index = wordIdx(pos);
+        if (!value && (index < m_index || index >= m_index + words().size()))
+            return;
         std::uint64_t mask = 1ULL << bitIdx(pos);
-        auto &data = writableWords();
+        auto &data = writableRange(index, index + 1);
         if (value)
-            data[wordIdx(pos)] |= mask;
+            data[index - m_index] |= mask;
         else
-            data[wordIdx(pos)] &= ~mask;
+            data[index - m_index] &= ~mask;
     }
 
     void set()
@@ -139,7 +143,7 @@ class RubyDynamicBitset
     void reset()
     {
         m_words.reset();
-        m_single = noBit;
+        m_index = noBit;
     }
 
     void reset(std::size_t pos)
@@ -149,7 +153,7 @@ class RubyDynamicBitset
 
     bool none() const
     {
-        if (m_single != noBit)
+        if (hasSingleton())
             return false;
         for (auto w : words()) if (w) return false;
         return true;
@@ -157,7 +161,7 @@ class RubyDynamicBitset
 
     std::size_t count() const
     {
-        if (m_single != noBit)
+        if (hasSingleton())
             return 1;
         std::size_t total = 0;
         for (auto w : words()) total += popcount(w);
@@ -169,13 +173,18 @@ class RubyDynamicBitset
         if (m_size != other.m_size)
             return false;
         if (!m_words && !other.m_words)
-            return m_single == other.m_single;
+            return m_index == other.m_index;
         if (!m_words)
-            return m_single == noBit ? other.none() :
-                other.count() == 1 && other.test(m_single);
+            return m_index == noBit ? other.none() :
+                other.count() == 1 && other.test(m_index);
         if (!other.m_words)
             return other == *this;
-        return words() == other.words();
+        if (m_words == other.m_words && m_index == other.m_index)
+            return true;
+        for (std::size_t i = 0; i < wordsFor(m_size); ++i)
+            if (wordAt(i) != other.wordAt(i))
+                return false;
+        return true;
     }
     bool operator!=(const RubyDynamicBitset &other) const
     {
@@ -210,39 +219,44 @@ class RubyDynamicBitset
     RubyDynamicBitset &operator|=(const RubyDynamicBitset &other)
     {
         assert(m_size == other.m_size);
-        if (other.m_single != noBit) {
-            set(other.m_single);
+        if (this == &other)
+            return *this;
+        if (other.hasSingleton()) {
+            set(other.m_index);
             return *this;
         }
         if (!other.m_words)
             return *this;
-        if (!m_words && m_single == noBit) {
+        if (!m_words && m_index == noBit) {
             m_words = other.m_words;
+            m_index = other.m_index;
             return *this;
         }
         auto &data = writableWords();
         for (std::size_t i = 0; i < data.size(); ++i)
-            data[i] |= other.words()[i];
+            data[i] |= other.wordAt(i);
         return *this;
     }
 
     RubyDynamicBitset &operator&=(const RubyDynamicBitset &other)
     {
         assert(m_size == other.m_size);
-        if (other.m_single != noBit) {
-            const auto pos = other.m_single;
+        if (this == &other)
+            return *this;
+        if (other.hasSingleton()) {
+            const auto pos = other.m_index;
             const bool retain = test(pos);
             reset();
             if (retain)
-                m_single = pos;
+                m_index = pos;
             return *this;
         }
         if (!other.m_words) {
             reset();
             return *this;
         }
-        if (m_single != noBit) {
-            if (!other.test(m_single))
+        if (hasSingleton()) {
+            if (!other.test(m_index))
                 reset();
             return *this;
         }
@@ -250,7 +264,7 @@ class RubyDynamicBitset
             return *this;
         auto &data = writableWords();
         for (std::size_t i = 0; i < data.size(); ++i)
-            data[i] &= other.words()[i];
+            data[i] &= other.wordAt(i);
         return *this;
     }
 
@@ -263,14 +277,17 @@ class RubyDynamicBitset
     bool intersects(const RubyDynamicBitset &other) const
     {
         assert(m_size == other.m_size);
-        if (m_single != noBit)
-            return other.test(m_single);
-        if (other.m_single != noBit)
-            return test(other.m_single);
+        if (hasSingleton())
+            return other.test(m_index);
+        if (other.hasSingleton())
+            return test(other.m_index);
         if (!m_words || !other.m_words)
             return false;
-        for (std::size_t i = 0; i < words().size(); ++i)
-            if (words()[i] & other.words()[i])
+        const auto begin = std::max(m_index, other.m_index);
+        const auto end = std::min(m_index + words().size(),
+                                  other.m_index + other.words().size());
+        for (std::size_t i = begin; i < end; ++i)
+            if (wordAt(i) & other.wordAt(i))
                 return true;
         return false;
     }
@@ -278,14 +295,14 @@ class RubyDynamicBitset
     template<class Callback>
     void forEachSetBit(Callback callback) const
     {
-        if (m_single != noBit) {
-            callback(m_single);
+        if (hasSingleton()) {
+            callback(m_index);
             return;
         }
         for (std::size_t i = 0; i < words().size(); ++i) {
             auto word = words()[i];
             while (word) {
-                const auto pos = i * kBitsPerWord + trailingZeros(word);
+                const auto pos = (i + m_index) * kBitsPerWord + trailingZeros(word);
                 if (pos >= m_size)
                     break;
                 callback(pos);
@@ -312,9 +329,10 @@ class RubyDynamicBitset
 
     std::uint64_t wordAt(std::size_t index) const
     {
-        if (m_single != noBit)
-            return wordIdx(m_single) == index ? 1ULL << bitIdx(m_single) : 0;
-        return m_words ? words()[index] : 0;
+        if (hasSingleton())
+            return wordIdx(m_index) == index ? 1ULL << bitIdx(m_index) : 0;
+        return m_words && index >= m_index && index - m_index < words().size()
+            ? words()[index - m_index] : 0;
     }
 
     const Words &words() const
@@ -323,18 +341,40 @@ class RubyDynamicBitset
         return m_words ? *m_words : empty;
     }
 
-    Words &writableWords()
+    bool hasSingleton() const { return !m_words && m_index != noBit; }
+
+    Words &writableRange(std::size_t begin, std::size_t end)
     {
         if (!m_words) {
-            m_words = std::make_shared<Words>(wordsFor(m_size), 0);
-            if (m_single != noBit) {
-                (*m_words)[wordIdx(m_single)] = 1ULL << bitIdx(m_single);
-                m_single = noBit;
+            const auto singleton = m_index;
+            if (singleton != noBit) {
+                begin = std::min(begin, wordIdx(singleton));
+                end = std::max(end, wordIdx(singleton) + 1);
             }
-        } else if (!m_words.unique())
-            m_words = std::make_shared<Words>(*m_words);
+            auto data = std::make_shared<Words>(end - begin, 0);
+            if (singleton != noBit)
+                (*data)[wordIdx(singleton) - begin] = 1ULL << bitIdx(singleton);
+            m_words = std::move(data);
+            m_index = begin;
+        } else {
+            if (!m_words.unique())
+                m_words = std::make_shared<Words>(*m_words);
+            const auto first = std::min(begin, m_index);
+            const auto length = std::max(end, m_index + m_words->size()) - first;
+            if (length > m_words->capacity())
+                m_words->reserve(std::min(wordsFor(m_size) - first,
+                    std::max(length, m_words->capacity() * 2)));
+            if (begin < m_index) {
+                m_words->insert(m_words->begin(), m_index - begin, 0);
+                m_index = begin;
+            }
+            if (end > m_index + m_words->size())
+                m_words->resize(end - m_index, 0);
+        }
         return *m_words;
     }
+
+    Words &writableWords() { return writableRange(0, wordsFor(m_size)); }
 
     static constexpr std::size_t kBitsPerWord = 64;
 
@@ -375,7 +415,8 @@ class RubyDynamicBitset
     }
 
     std::size_t m_size;
-    std::size_t m_single = noBit;
+    // Inline bit index when backing is null; first stored word otherwise.
+    std::size_t m_index = noBit;
     // A null backing array represents an empty or inline singleton set.
     // Copies retain value semantics: reads share immutable storage; every
     // mutator obtains an independent backing array before changing a word.
