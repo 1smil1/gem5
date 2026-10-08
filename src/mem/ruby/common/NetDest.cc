@@ -121,12 +121,12 @@ NetDest::getAllDest()
     std::vector<NodeID> dest;
     dest.clear();
     for (int i = 0; i < m_bits.size(); i++) {
-        for (int j = 0; j < m_bits[i].getSize(); j++) {
-            if (m_bits[i].isElement(j)) {
-                int id = MachineType_base_number((MachineType)i) + j;
-                dest.push_back((NodeID)id);
-            }
-        }
+        if (m_bits[i].isEmpty())
+            continue;
+        const auto base = MachineType_base_number((MachineType)i);
+        m_bits[i].forEachElement([&](std::size_t j) {
+            dest.push_back(static_cast<NodeID>(base + j));
+        });
     }
     return dest;
 }
