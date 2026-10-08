@@ -58,6 +58,7 @@ class NetDest
     void add(MachineID newElement);
     void addNetDest(const NetDest& netDest);
     void setNetDest(MachineType machine, const Set& set);
+    void shareMachineDestinations(MachineType destination, MachineType source);
     void remove(MachineID oldElement);
     void removeNetDest(const NetDest& netDest);
     void clear();

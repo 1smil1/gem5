@@ -427,6 +427,17 @@ Topology::createLinks(Network *net)
         for (auto &routes : routing_maps)
             routes.emplace_back();
         const bool bounded_weights = maximum_weight[v] <= 2;
+        // Only terminal sinks may share destination planes. For two machine
+        // types with identical single-parent attachments at every offset, all
+        // distances and selected nonterminal edges are identical. Their final
+        // output edges still carry distinct MachineIDs. Set copies use COW.
+        bool terminal_sinks = true;
+        for (int node = m_nodes; node < 2 * m_nodes; ++node) {
+            for (const auto &[dst, weight] : topology_weights.adj[v][node]) {
+                if (weight > 0 && weight != INFINITE_LATENCY)
+                    terminal_sinks = false;
+            }
+        }
         topologyInitProgress("reverse shortest paths vnet=" +
             std::to_string(v + 1) + "/" + std::to_string(m_vnets) +
             " engine=" + (bounded_weights ? "bounded-weight FIFO" : "Dijkstra") +
@@ -445,6 +456,51 @@ Topology::createLinks(Network *net)
             }
             fatal_if(type == MachineType_NUM, "Invalid topology destination %d", d);
             const MachineID destination{(MachineType)type, static_cast<NodeID>(remaining)};
+            if (remaining == 0 && terminal_sinks) {
+                const auto machine = static_cast<MachineType>(type);
+                const int count = MachineType_base_count(machine);
+                int equivalent_type = -1;
+                for (int earlier = 0; earlier < type; ++earlier) {
+                    const auto source = static_cast<MachineType>(earlier);
+                    if (MachineType_base_count(source) != count)
+                        continue;
+                    const int source_base = MachineType_base_number(source);
+                    bool equivalent = true;
+                    for (int offset = 0; offset < count; ++offset) {
+                        const auto &parents = reverse_adj[v][m_nodes + d + offset];
+                        if (parents.size() != 1 || parents !=
+                            reverse_adj[v][m_nodes + source_base + offset]) {
+                            equivalent = false;
+                            break;
+                        }
+                    }
+                    if (equivalent) {
+                        equivalent_type = earlier;
+                        break;
+                    }
+                }
+                if (equivalent_type >= 0) {
+                    for (const RouteEdge &edge : route_edges[v]) {
+                        if (edge.dst >= m_nodes && edge.dst < 2 * m_nodes) {
+                            if (edge.dst >= m_nodes + d &&
+                                edge.dst < m_nodes + d + count)
+                                routing_maps[edge.link][v].add(MachineID{
+                                    machine, static_cast<NodeID>(edge.dst - m_nodes - d)});
+                        } else {
+                            routing_maps[edge.link][v].shareMachineDestinations(
+                                machine, static_cast<MachineType>(equivalent_type));
+                        }
+                    }
+                    topologyInitProgress("reverse shortest paths vnet=" +
+                        std::to_string(v + 1) + "/" + std::to_string(m_vnets) +
+                        " equivalent terminal type=" + std::to_string(type) +
+                        " shared from type=" + std::to_string(equivalent_type) +
+                        " destinations=" + std::to_string(d + count) + "/" +
+                        std::to_string(m_nodes));
+                    d += count - 1;
+                    continue;
+                }
+            }
             const int target = m_nodes + d;
             std::fill(distance.begin(), distance.end(), INFINITE_LATENCY);
             distance[target] = 0;

@@ -67,6 +67,13 @@ NetDest::setNetDest(MachineType machine, const Set& set)
 }
 
 void
+NetDest::shareMachineDestinations(MachineType destination, MachineType source)
+{
+    assert(MachineType_base_count(destination) == MachineType_base_count(source));
+    setNetDest(destination, m_bits[MachineType_base_level(source)]);
+}
+
+void
 NetDest::remove(MachineID oldElement)
 {
     m_bits[vecIndex(oldElement)].remove(bitIndex(oldElement.num));
