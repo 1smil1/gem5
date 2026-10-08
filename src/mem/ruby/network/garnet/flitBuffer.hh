@@ -34,7 +34,7 @@
 #include <algorithm>
 #include <deque>
 #include <iostream>
-#include <optional>
+#include <memory>
 #include <vector>
 
 #include "mem/ruby/network/garnet/CommonTypes.hh"
@@ -80,7 +80,7 @@ class flitBuffer
     insert(flit *flt)
     {
         if (!m_buffer)
-            m_buffer.emplace();
+            m_buffer = std::make_unique<std::deque<flit *>>();
         m_buffer->push_back(flt);
     }
 
@@ -90,7 +90,8 @@ class flitBuffer
   private:
     // Empty VCs/links need no deque backing allocation. Retain the deque after
     // first use so repeated traffic does not repeatedly allocate its storage.
-    std::optional<std::deque<flit *>> m_buffer;
+    // Keep even the deque control block out of the many unused VC objects.
+    std::unique_ptr<std::deque<flit *>> m_buffer;
     int max_size;
 };
 

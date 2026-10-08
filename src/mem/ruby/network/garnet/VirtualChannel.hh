@@ -50,6 +50,8 @@ class VirtualChannel
 {
   public:
     VirtualChannel();
+    VirtualChannel(VirtualChannel &&) = default;
+    VirtualChannel &operator=(VirtualChannel &&) = default;
     ~VirtualChannel() = default;
 
     bool need_stage(flit_stage stage, Tick time);

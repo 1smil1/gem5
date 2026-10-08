@@ -33,6 +33,7 @@
 #define __MEM_RUBY_NETWORK_GARNET_0_NETWORK_BRIDGE_HH__
 
 #include <iostream>
+#include <memory>
 #include <queue>
 #include <vector>
 
@@ -98,7 +99,8 @@ class NetworkBridge: public CreditLink
     std::vector<int> lenBuffer;
     std::vector<int> sizeSent;
     std::vector<int> flitsSent;
-    std::vector<std::queue<int>> extraCredit;
+    // Every VC keeps independent FIFO credits, with backing allocated on use.
+    std::vector<std::unique_ptr<std::queue<int>>> extraCredit;
 
 };
 

@@ -122,7 +122,9 @@ NetworkBridge::scheduleFlit(flit *t_flit, Cycles latency)
 void
 NetworkBridge::neutralize(int vc, int eCredit)
 {
-    extraCredit[vc].push(eCredit);
+    if (!extraCredit[vc])
+        extraCredit[vc] = std::make_unique<std::queue<int>>();
+    extraCredit[vc]->push(eCredit);
 }
 
 void
@@ -153,10 +155,11 @@ NetworkBridge::flitisizeAndSend(flit *t_flit)
             const int nextFlitId = sizeSent[vc] / target_width;
             if (t_flit->get_type() == CREDIT_) {
                 lenBuffer[vc]++;
-                assert(extraCredit[vc].front());
-                if (lenBuffer[vc] == extraCredit[vc].front()) {
+                assert(extraCredit[vc] && !extraCredit[vc]->empty());
+                assert(extraCredit[vc]->front());
+                if (lenBuffer[vc] == extraCredit[vc]->front()) {
                     flitPossible = 1;
-                    extraCredit[vc].pop();
+                    extraCredit[vc]->pop();
                     lenBuffer[vc] = 0;
                 }
             } else if (t_flit->get_type() == TAIL_ ||
@@ -213,8 +216,9 @@ NetworkBridge::flitisizeAndSend(flit *t_flit)
                 // We store the deserialization ratio and then
                 // access it when serializing credits in the
                 // oppposite direction.
-                flitPossible = extraCredit[vc].front();
-                extraCredit[vc].pop();
+                assert(extraCredit[vc] && !extraCredit[vc]->empty());
+                flitPossible = extraCredit[vc]->front();
+                extraCredit[vc]->pop();
                 if (flitPossible == 0) {
                     delete t_flit;
                     return;
