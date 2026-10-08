@@ -61,6 +61,9 @@ class RubyController(ClockedObject):
     recycle_latency = Param.Cycles(10, "")
     number_of_TBEs = Param.Int(256, "")
     ruby_system = Param.RubySystem("")
+    native_message_buffer_template = Param.MessageBuffer(
+        NULL, "Optional parameter template for C++-owned protocol queues"
+    )
 
     # This is typically a proxy to the icache/dcache hit latency.
     # If the latency depends on the request type or protocol-specific states,

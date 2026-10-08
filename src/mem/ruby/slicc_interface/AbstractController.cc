@@ -73,6 +73,32 @@ AbstractController::AbstractController(const Params &p)
     }
 }
 
+MessageBuffer *
+AbstractController::resolveMessageBuffer(MessageBuffer *configured,
+                                         const char *child_name)
+{
+    auto *buffer_template = params().native_message_buffer_template;
+    if (!buffer_template)
+        return configured; // Native construction is explicitly disabled.
+    fatal_if(configured || typeid(*buffer_template) != typeid(MessageBuffer),
+             "%s.%s: native queue requires null child and plain MessageBuffer template",
+             name(), child_name);
+    const auto &original = static_cast<const MessageBufferParams &>(
+        buffer_template->params());
+    fatal_if(original.port_in_port_connection_count ||
+             original.port_out_port_connection_count,
+             "%s: native queue template must have no external port connections", name());
+    auto child_params = std::make_unique<MessageBufferParams>(original);
+    child_params->name = name() + "." + child_name;
+    child_params->eventq_index = params().eventq_index;
+    auto child = std::make_unique<MessageBuffer>(*child_params);
+    auto *result = child.get();
+    nativeBufferParams.push_back(std::move(child_params));
+    nativeBuffers.push_back(std::move(child));
+    addStatGroup(child_name, result);
+    return result;
+}
+
 void
 AbstractController::init()
 {

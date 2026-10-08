@@ -649,7 +649,10 @@ $c_ident::$c_ident(const Params &p)
         #
         for param in self.config_parameters:
             if param.pointer:
-                code("m_${{param.ident}}_ptr = p.${{param.ident}};")
+                if param.type_ast.type.c_ident == "MessageBuffer":
+                    code('m_${{param.ident}}_ptr = resolveMessageBuffer(p.${{param.ident}}, "${{param.ident}}");')
+                else:
+                    code("m_${{param.ident}}_ptr = p.${{param.ident}};")
             else:
                 code("m_${{param.ident}} = p.${{param.ident}};")
 

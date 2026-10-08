@@ -43,8 +43,10 @@
 
 #include <exception>
 #include <iostream>
+#include <memory>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 #include "base/addr_range.hh"
 #include "base/addr_range_map.hh"
@@ -221,6 +223,10 @@ class AbstractController : public ClockedObject, public Consumer
     const NetDest& allUpstreamDest() const { return upstreamDestinations; }
 
   protected:
+    MessageBuffer *resolveMessageBuffer(MessageBuffer *configured,
+                                        const char *child_name);
+    std::vector<std::unique_ptr<MessageBufferParams>> nativeBufferParams;
+    std::vector<std::unique_ptr<MessageBuffer>> nativeBuffers;
     //! Profiles original cache requests including PUTs
     void profileRequest(const std::string &request);
     //! Profiles the delay associated with messages.

@@ -28,6 +28,7 @@
 import os
 import m5
 from m5.objects import *
+from m5.params import NULL
 from m5.defines import buildEnv
 from m5.util import addToPath
 from .Ruby import create_topology, create_directories
@@ -82,6 +83,9 @@ def create_system(
             ruby_system=ruby_system,
         )
 
+    native_buffers = (getattr(options, "online_control", False)
+                      and os.environ.get("OMELET_COMM_DUMP_STATS") == "0")
+    buffer_template = None
     for i in range(options.num_cpus):
         if i % 1000 == 0:
             print(f"OMELET_INIT Ruby controllers {i}/{options.num_cpus}; wall_s={time.monotonic() - init_started:.1f}", flush=True)
@@ -114,10 +118,20 @@ def create_system(
         l1_cntrl_nodes.append(l1_cntrl)
 
         # Connect the L1 controllers and the network
-        l1_cntrl.mandatoryQueue = MessageBuffer()
-        l1_cntrl.requestFromCache = MessageBuffer()
-        l1_cntrl.responseFromCache = MessageBuffer()
-        l1_cntrl.forwardFromCache = MessageBuffer()
+        if native_buffers and i > 0:
+            l1_cntrl.native_message_buffer_template = buffer_template
+            for queue in ("mandatoryQueue", "requestFromCache",
+                          "responseFromCache", "forwardFromCache"):
+                setattr(l1_cntrl, queue, NULL)
+        else:
+            l1_cntrl.mandatoryQueue = MessageBuffer()
+            l1_cntrl.requestFromCache = MessageBuffer()
+            l1_cntrl.responseFromCache = MessageBuffer()
+            l1_cntrl.forwardFromCache = MessageBuffer()
+            # Reuse the first real queue's immutable Params, not its contents.
+            # No extra template object/statistics are introduced.
+            if native_buffers:
+                buffer_template = l1_cntrl.mandatoryQueue
 
     print(f"OMELET_INIT Ruby controllers created; creating directory controllers; wall_s={time.monotonic() - init_started:.1f}", flush=True)
     mem_dir_cntrl_nodes, rom_dir_cntrl_node = create_directories(
@@ -133,9 +147,16 @@ def create_system(
             and os.environ.get("OMELET_COMM_DUMP_STATS") == "0"
         )
         # Connect the directory controllers and the network
-        dir_cntrl.requestToDir = MessageBuffer()
-        dir_cntrl.forwardToDir = MessageBuffer()
-        dir_cntrl.responseToDir = MessageBuffer()
+        if native_buffers:
+            if buffer_template is None:
+                raise RuntimeError("Native protocol queues require a real endpoint queue template")
+            dir_cntrl.native_message_buffer_template = buffer_template
+            for queue in ("requestToDir", "forwardToDir", "responseToDir"):
+                setattr(dir_cntrl, queue, NULL)
+        else:
+            dir_cntrl.requestToDir = MessageBuffer()
+            dir_cntrl.forwardToDir = MessageBuffer()
+            dir_cntrl.responseToDir = MessageBuffer()
 
     all_cntrls = l1_cntrl_nodes + dir_cntrl_nodes
     ruby_system.network.number_of_virtual_networks = 3
