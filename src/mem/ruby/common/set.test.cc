@@ -7,6 +7,7 @@
 #include "mem/ruby/common/Set.hh"
 
 using gem5::ruby::RubyDynamicBitset;
+using gem5::ruby::Set;
 
 namespace {
 void check(const RubyDynamicBitset &bits, const std::vector<bool> &reference,
@@ -26,6 +27,33 @@ void check(const RubyDynamicBitset &bits, const std::vector<bool> &reference,
     EXPECT_EQ(actual, expected);
 }
 } // namespace
+
+TEST(RubySetTest, WrapperSizeAndCopySemantics)
+{
+    std::cout << "Ruby Set bytes=" << sizeof(Set) << '\n';
+    Set source(54752);
+    source.add(54751);
+    Set copy = source;
+    copy.remove(54751);
+    EXPECT_EQ(copy.getSize(), 54752);
+    EXPECT_TRUE(copy.isEmpty());
+    EXPECT_TRUE(source.isElement(54751));
+    copy = source;
+    copy.add(0);
+    EXPECT_EQ(copy.OR(source).count(), 2);
+    EXPECT_EQ(copy.AND(source).count(), 1);
+    EXPECT_FALSE(source.isElement(0));
+    copy.removeSet(source);
+    EXPECT_EQ(copy.smallestElement(), 0);
+    copy.setSize(64);
+    EXPECT_EQ(copy.getSize(), 64);
+    EXPECT_TRUE(copy.isEmpty());
+    copy.broadcast();
+    EXPECT_TRUE(copy.isBroadcast());
+    copy.clear();
+    EXPECT_EQ(copy.getSize(), 64);
+    EXPECT_TRUE(copy.isEmpty());
+}
 
 TEST(RubySetTest, SingletonAndDenseValueSemantics)
 {

@@ -376,7 +376,7 @@ class RubyDynamicBitset
 
     std::size_t m_size;
     std::size_t m_single = noBit;
-    // A null backing array represents zero bits at the full logical size.
+    // A null backing array represents an empty or inline singleton set.
     // Copies retain value semantics: reads share immutable storage; every
     // mutator obtains an independent backing array before changing a word.
     std::shared_ptr<Words> m_words;
@@ -385,24 +385,16 @@ class RubyDynamicBitset
 class Set
 {
   private:
-    // Number of bits in use in this set.
-    int m_nSize;
     RubyDynamicBitset bits;
 
   public:
-    Set() : m_nSize(0) {}
+    Set() = default;
 
-    Set(int size) : m_nSize(size), bits(static_cast<std::size_t>(size)) {}
+    Set(int size) : bits(static_cast<std::size_t>(size)) {}
 
-    Set(const Set& obj) : m_nSize(obj.m_nSize), bits(obj.bits) {}
-    ~Set() {}
-
-    Set& operator=(const Set& obj)
-    {
-        m_nSize = obj.m_nSize;
-        bits = obj.bits;
-        return *this;
-    }
+    Set(const Set& obj) = default;
+    ~Set() = default;
+    Set& operator=(const Set& obj) = default;
 
     void
     add(NodeID index)
@@ -417,7 +409,7 @@ class Set
     void
     addSet(const Set& obj)
     {
-        assert(m_nSize == obj.m_nSize);
+        assert(getSize() == obj.getSize());
         bits |= obj.bits;
     }
 
@@ -436,7 +428,7 @@ class Set
     void
     removeSet(const Set& obj)
     {
-        assert(m_nSize == obj.m_nSize);
+        assert(getSize() == obj.getSize());
         bits &= (~obj.bits);
     }
 
@@ -447,7 +439,7 @@ class Set
      */
     void broadcast()
     {
-        bits.resize(static_cast<std::size_t>(m_nSize));
+        bits.resize(static_cast<std::size_t>(getSize()));
         bits.set();
     }
 
@@ -462,7 +454,7 @@ class Set
     bool
     isEqual(const Set& obj) const
     {
-        assert(m_nSize == obj.m_nSize);
+        assert(getSize() == obj.getSize());
         return bits == obj.bits;
     }
 
@@ -470,8 +462,8 @@ class Set
     Set
     OR(const Set& obj) const
     {
-        assert(m_nSize == obj.m_nSize);
-        Set r(m_nSize);
+        assert(getSize() == obj.getSize());
+        Set r(getSize());
         r.bits = bits | obj.bits;
         return r;
     };
@@ -480,8 +472,8 @@ class Set
     Set
     AND(const Set& obj) const
     {
-        assert(m_nSize == obj.m_nSize);
-        Set r(m_nSize);
+        assert(getSize() == obj.getSize());
+        Set r(getSize());
         r.bits = bits & obj.bits;
         return r;
     }
@@ -500,7 +492,7 @@ class Set
     bool
     isSuperset(const Set& test) const
     {
-        assert(m_nSize == test.m_nSize);
+        assert(getSize() == test.getSize());
         RubyDynamicBitset r = bits | test.bits;
         return (r == bits);
     }
@@ -515,14 +507,14 @@ class Set
     bool
     isBroadcast() const
     {
-        return (bits.count() == static_cast<std::size_t>(m_nSize));
+        return (bits.count() == static_cast<std::size_t>(getSize()));
     }
 
     bool isEmpty() const { return bits.none(); }
 
     NodeID smallestElement() const
     {
-        for (int i = 0; i < m_nSize; ++i) {
+        for (int i = 0; i < getSize(); ++i) {
             if (bits.test(i)) {
                 return i;
             }
@@ -532,7 +524,7 @@ class Set
 
     bool elementAt(int index) const { return bits[index]; }
 
-    int getSize() const { return m_nSize; }
+    int getSize() const { return static_cast<int>(bits.size()); }
 
     template<class Callback>
     void forEachElement(Callback callback) const
@@ -543,13 +535,12 @@ class Set
     void
     setSize(int size)
     {
-        m_nSize = size;
         bits.resize(static_cast<std::size_t>(size));
     }
 
     void print(std::ostream& out) const
     {
-        out << "[Set (" << m_nSize << "): " << bits << "]";
+        out << "[Set (" << getSize() << "): " << bits << "]";
     }
 };
 
