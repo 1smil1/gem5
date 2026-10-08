@@ -368,11 +368,14 @@ Topology::createLinks(Network *net)
                 maximum_weight[v] = std::max(maximum_weight[v], weight);
                 // Both GarnetNetwork and SimpleNetwork ignore route masks in
                 // makeExtInLink(): injection has no output-port choice here.
-                // Retain the edge in shortest paths and create the real link;
-                // only the unused mask is omitted outside full digest checks.
-                if (digest_routes || src >= m_nodes)
+                // These virtual input vertices have no incoming edges, so
+                // they cannot lie on a router-to-destination path either.
+                // Create every real link; full digests retain the original
+                // virtual-source distances and masks for historical checks.
+                if (digest_routes || src >= m_nodes) {
                     route_edges[v].push_back({src, dst, weight, i});
-                reverse_adj[v][dst].push_back({src, weight});
+                    reverse_adj[v][dst].push_back({src, weight});
+                }
             }
         }
     }
@@ -507,7 +510,9 @@ Topology::createLinks(Network *net)
                 }
             }
             const int target = m_nodes + d;
-            std::fill(distance.begin(), distance.end(), INFINITE_LATENCY);
+            // Omitted virtual sources stay at their initial infinite value.
+            std::fill(distance.begin() + (digest_routes ? 0 : m_nodes),
+                      distance.end(), INFINITE_LATENCY);
             distance[target] = 0;
             if (bounded_weights) {
                 // Dial's queue for positive integer costs <= 2. Three cyclic
