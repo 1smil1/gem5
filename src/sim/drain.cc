@@ -160,9 +160,9 @@ void
 DrainManager::registerDrainable(Drainable *obj)
 {
     std::lock_guard<std::mutex> lock(globalLock);
-    assert(std::find(_allDrainable.begin(), _allDrainable.end(), obj) ==
-           _allDrainable.end());
+    assert(!obj->_registered);
     _allDrainable.push_back(obj);
+    obj->_registered = true;
 }
 
 void
@@ -172,6 +172,7 @@ DrainManager::unregisterDrainable(Drainable *obj)
     auto o = std::find(_allDrainable.begin(), _allDrainable.end(), obj);
     assert(o != _allDrainable.end());
     _allDrainable.erase(o);
+    obj->_registered = false;
 }
 
 bool

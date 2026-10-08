@@ -95,6 +95,7 @@ env.TagImplies('gem5 events', ['gem5 serialize', 'gem5 trace'])
 env.TagImplies('gem5 serialize', 'gem5 trace')
 
 GTest('bufval.test', 'bufval.test.cc', 'bufval.cc')
+GTest('drain.test', 'drain.test.cc', with_tag('gem5 drain'))
 GTest('byteswap.test', 'byteswap.test.cc', '../base/types.cc')
 GTest('globals.test', 'globals.test.cc', 'globals.cc',
     with_tag('gem5 serialize'))

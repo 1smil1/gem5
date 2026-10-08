@@ -358,6 +358,10 @@ class Drainable
      * into a Drained state even if the calling method is const.
      */
     mutable DrainState _drainState;
+
+    // Membership in the singleton manager; avoids scanning every existing
+    // SimObject during construction. The manager protects this with its lock.
+    bool _registered = false;
 };
 
 } // namespace gem5
