@@ -69,6 +69,8 @@ class GarnetIntLink : public BasicIntLink
     std::unique_ptr<CreditLinkParams> nativeCreditParams;
     std::unique_ptr<NetworkLink> nativeNetwork;
     std::unique_ptr<CreditLink> nativeCredit;
+    std::unique_ptr<NetworkBridgeParams> nativeBridgeParams[4];
+    std::unique_ptr<NetworkBridge> nativeBridges[4];
     NetworkLink* m_network_link;
     CreditLink* m_credit_link;
 

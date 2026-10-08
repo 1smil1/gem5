@@ -34,6 +34,7 @@
 #include "mem/ruby/network/garnet/CreditLink.hh"
 #include "mem/ruby/network/garnet/NetworkBridge.hh"
 #include "mem/ruby/network/garnet/NetworkLink.hh"
+#include "mem/ruby/network/garnet/Router.hh"
 
 namespace gem5
 {
@@ -81,9 +82,9 @@ GarnetIntLink::GarnetIntLink(const Params &p)
     // Uni-directional
 
     if (p.native_children) {
-        fatal_if(p.src_cdc || p.dst_cdc || p.src_serdes || p.dst_serdes ||
-                 p.network_link || p.credit_link,
-                 "Native internal link children require unbridged null child parameters");
+        fatal_if(p.network_link || p.credit_link || p.src_net_bridge ||
+                 p.src_cred_bridge || p.dst_net_bridge || p.dst_cred_bridge,
+                 "Native internal link children require null Python child parameters");
         nativeNetworkParams = nativeLinkParams<NetworkLinkParams>(p, "network_link");
         nativeCreditParams = nativeLinkParams<CreditLinkParams>(p, "credit_link");
         nativeNetwork = std::make_unique<NetworkLink>(*nativeNetworkParams);
@@ -110,13 +111,47 @@ GarnetIntLink::GarnetIntLink(const Params &p)
 
     if (srcCdcEn || srcSerdesEn) {
         srcBridgeEn = true;
-        srcNetBridge = p.src_net_bridge;
-        srcCredBridge = p.src_cred_bridge;
+        if (!p.native_children) {
+            srcNetBridge = p.src_net_bridge;
+            srcCredBridge = p.src_cred_bridge;
+        }
     }
     if (dstCdcEn || dstSerdesEn) {
         dstBridgeEn = true;
-        dstNetBridge = p.dst_net_bridge;
-        dstCredBridge = p.dst_cred_bridge;
+        if (!p.native_children) {
+            dstNetBridge = p.dst_net_bridge;
+            dstCredBridge = p.dst_cred_bridge;
+        }
+    }
+
+    if (p.native_children) {
+        auto makeBridge = [&](int index, const char *name, BasicRouter *node,
+                              NetworkLink *link, enums::CDCType direction) {
+            auto *router = dynamic_cast<Router *>(node);
+            fatal_if(!router, "Native Garnet bridge requires a Garnet router");
+            auto &params = nativeBridgeParams[index];
+            params = nativeLinkParams<NetworkBridgeParams>(p, name);
+            params->width = router->getBitWidth();
+            params->link = link;
+            params->vtype = direction;
+            params->serdes_latency = p.native_bridge_serdes_latency;
+            params->cdc_latency = p.native_bridge_cdc_latency;
+            nativeBridges[index] = std::make_unique<NetworkBridge>(*params);
+            addStatGroup(name, nativeBridges[index].get());
+            return nativeBridges[index].get();
+        };
+        if (srcBridgeEn) {
+            srcNetBridge = makeBridge(0, "src_net_bridge", p.src_node,
+                                     m_network_link, enums::OBJECT_LINK);
+            srcCredBridge = makeBridge(1, "src_cred_bridge", p.src_node,
+                                      m_credit_link, enums::LINK_OBJECT);
+        }
+        if (dstBridgeEn) {
+            dstNetBridge = makeBridge(2, "dst_net_bridge", p.dst_node,
+                                     m_network_link, enums::LINK_OBJECT);
+            dstCredBridge = makeBridge(3, "dst_cred_bridge", p.dst_node,
+                                      m_credit_link, enums::OBJECT_LINK);
+        }
     }
 }
 

@@ -248,21 +248,16 @@ def create_network(options, ruby):
         ExtLinkClass = GarnetExtLink
         if (options.topology in {"mesh_nox", "irregular_nox", "nox3d_mesh"}
                 and os.environ.get("OMELET_COMM_DUMP_STATS") == "0"):
-            # Absent bridge flags use Garnet's declared False defaults. CDC /
-            # SerDes links retain Python children referenced by NetworkBridge.
+            # External bridges retain their existing Python children.
             def IntLinkClass(**parameters):
-                bridged = any(parameters.get(flag, False) for flag in
-                              ("src_cdc", "dst_cdc", "src_serdes", "dst_serdes"))
-                cls = GarnetIntLink if bridged else NativeGarnetIntLink
                 # Legacy BasicLink rejects a non-parameter clock child if it
                 # already has a parent; its link children then inherit above
                 # the link. An orphan clock is owned by the link instead.
-                if not bridged:
-                    clock = parameters.pop("clk_domain")
-                    if not clock.has_parent():
-                        parameters["clk_domain"] = clock
-                        parameters["native_link_clock"] = clock
-                return cls(**parameters)
+                clock = parameters.pop("clk_domain")
+                if not clock.has_parent():
+                    parameters["clk_domain"] = clock
+                    parameters["native_link_clock"] = clock
+                return NativeGarnetIntLink(**parameters)
 
             def ExtLinkClass(**parameters):
                 bridged = any(parameters.get(flag, False) for flag in
@@ -308,6 +303,10 @@ def init_network(options, network, InterfaceClass):
         network.garnet_deadlock_threshold = options.garnet_deadlock_threshold
 
         for intLink in network.int_links:
+            if intLink.native_children:
+                # C++ constructs the same enabled bridge pairs and wires them
+                # through the original GarnetIntLink.init / initBridge path.
+                continue
             # GarnetIntLink enables these pairs only for CDC or SerDes.
             # An inactive bridge never participates in timing or flow control.
             if intLink.src_cdc or intLink.src_serdes:

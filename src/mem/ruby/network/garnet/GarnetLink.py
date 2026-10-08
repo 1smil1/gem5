@@ -94,7 +94,10 @@ class GarnetIntLink(BasicIntLink):
     # and one backward flow-control link (for credit)
     network_link = Param.NetworkLink(NetworkLink(), "forward link")
     credit_link = Param.CreditLink(CreditLink(), "backward flow-control link")
-    native_children = Param.Bool(False, "Create unbridged link children in C++")
+    native_children = Param.Bool(False, "Create link and bridge children in C++")
+    # Match the declared NetworkBridge defaults; no link-latency substitution.
+    native_bridge_serdes_latency = Param.Cycles(1, "Native bridge SerDes latency")
+    native_bridge_cdc_latency = Param.Cycles(1, "Native bridge CDC latency")
     native_link_clock = Param.ClockDomain(NULL, "Clock for native link children")
     native_power_template = Param.PowerState(NULL, "PowerState parameter template")
     native_vcs = Param.Int(Parent.vcs_per_vnet, "Native child VC count")
