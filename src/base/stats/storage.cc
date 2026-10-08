@@ -59,6 +59,8 @@ DistStor::sample(Counter val, int number)
     else if (val > max_track)
         overflow += number;
     else {
+        if (cvec.empty())
+            cvec.resize(numBuckets);
         cvec[std::floor((val - min_track) / bucket_size)] += number;
     }
 

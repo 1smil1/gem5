@@ -233,6 +233,7 @@ struct DistParams : public StorageParams
 class DistStor
 {
   private:
+    size_type numBuckets;
     /** The minimum value to track. */
     Counter min_track;
     /** The maximum value to track. */
@@ -286,7 +287,7 @@ class DistStor
     };
 
     DistStor(const StorageParams* const storage_params)
-        : cvec(safe_cast<const Params *>(storage_params)->buckets)
+        : numBuckets(safe_cast<const Params *>(storage_params)->buckets)
     {
         reset(storage_params);
     }
@@ -302,7 +303,7 @@ class DistStor
      * Return the number of buckets in this distribution.
      * @return the number of buckets.
      */
-    size_type size() const { return cvec.size(); }
+    size_type size() const { return numBuckets; }
 
     /**
      * Returns true if any calls to sample have been made.
@@ -330,9 +331,14 @@ class DistStor
         data.underflow = underflow;
         data.overflow = overflow;
 
-        data.cvec.resize(params->buckets);
-        for (off_type i = 0; i < params->buckets; ++i)
-            data.cvec[i] = cvec[i];
+        if (cvec.empty()) {
+            // No in-range sample yet: every real bucket is exactly zero.
+            data.cvec.assign(params->buckets, Counter());
+        } else {
+            data.cvec.resize(params->buckets);
+            for (off_type i = 0; i < params->buckets; ++i)
+                data.cvec[i] = cvec[i];
+        }
 
         data.sum = sum;
         data.squares = squares;

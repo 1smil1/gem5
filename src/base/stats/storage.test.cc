@@ -279,6 +279,38 @@ TEST(StatsDistStorTest, ZeroReset)
     ASSERT_TRUE(stor.zero());
 }
 
+TEST(StatsDistStorTest, EmptyBucketsAndReusedOutput)
+{
+    statistics::DistStor::Params params(0, 9, 1);
+    statistics::DistStor stor(&params);
+    statistics::DistData data;
+    data.cvec.assign(10, 99);
+    stor.prepare(&params, data);
+    EXPECT_EQ(stor.size(), 10);
+    EXPECT_EQ(data.cvec, statistics::VCounter(10, 0));
+
+    stor.sample(-1, 2);
+    stor.sample(10, 3);
+    stor.prepare(&params, data);
+    EXPECT_EQ(data.underflow, 2);
+    EXPECT_EQ(data.overflow, 3);
+    EXPECT_EQ(data.samples, 5);
+    EXPECT_EQ(data.sum, 28);
+    EXPECT_EQ(data.cvec, statistics::VCounter(10, 0));
+
+    stor.sample(3, 4);
+    stor.prepare(&params, data);
+    EXPECT_EQ(data.cvec[3], 4);
+    EXPECT_EQ(data.samples, 9);
+    EXPECT_EQ(data.sum, 40);
+    EXPECT_EQ(data.squares, 338);
+    stor.reset(&params);
+    stor.prepare(&params, data);
+    EXPECT_EQ(stor.size(), 10);
+    EXPECT_EQ(data.samples, 0);
+    EXPECT_EQ(data.cvec, statistics::VCounter(10, 0));
+}
+
 /**
  * Test that the size of this storage is equal to its counters vector's size,
  * and that after it has been set, nothing can modify it.
