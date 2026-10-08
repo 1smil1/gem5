@@ -95,7 +95,7 @@ def instantiate(ckpt_dir=None):
             if count % 10000 == 0:
                 position = f"{count}/{total}" if total is not None else f"{count}; total=dynamic"
                 progress(f"{stage} processed={position}; next={type(obj).__name__}")
-            is_network = type(obj).__name__ == "GarnetNetwork"
+            is_network = type(obj).__name__ in {"GarnetNetwork", "NativeGraphNetwork"}
             if is_network:
                 progress(f"{stage} GarnetNetwork started")
             yield obj

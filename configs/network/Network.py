@@ -271,6 +271,22 @@ def create_network(options, ruby):
                 return cls(**parameters)
         RouterClass = GarnetRouter
         InterfaceClass = GarnetNetworkInterface
+        # Normal online 2D NoX uses compact C++ construction. Detailed debug
+        # retains the original Python graph for complete config inspection.
+        native_graph_supported = options.topology in {"mesh_nox", "irregular_nox"}
+        native_graph_default = ("1" if native_graph_supported
+                                and os.environ.get("OMELET_COMM_DUMP_STATS") == "0" else "0")
+        native_graph_mode = os.environ.get("OMELET_NATIVE_GRAPH", native_graph_default)
+        if native_graph_mode not in {"0", "1"}:
+            raise ValueError("OMELET_NATIVE_GRAPH must be 0 or 1")
+        if native_graph_mode == "1":
+            if (not native_graph_supported
+                    or os.environ.get("OMELET_COMM_DUMP_STATS") != "0"):
+                raise ValueError("Native graph requires the normal online 2D NoX configuration")
+            from network.native_graph import NativeGraphNetwork, factories
+            NetworkClass = NativeGraphNetwork
+            RouterClass, IntLinkClass, ExtLinkClass = factories(
+                NativeGarnetIntLink, NativeGarnetExtLink, GarnetExtLink)
 
     else:
         NetworkClass = SimpleNetwork
@@ -369,10 +385,13 @@ def init_network(options, network, InterfaceClass):
         network.setup_buffers()
 
     if InterfaceClass != None:
-        netifs = [
-            InterfaceClass(id=i) for (i, n) in enumerate(network.ext_links)
-        ]
-        network.netifs = netifs
+        if type(network).__name__ == "NativeGraphNetwork":
+            network.makeInterfaceAnchor(InterfaceClass)
+        else:
+            netifs = [
+                InterfaceClass(id=i) for (i, n) in enumerate(network.ext_links)
+            ]
+            network.netifs = netifs
 
     if options.network_fault_model:
         assert options.network == "garnet"

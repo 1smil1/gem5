@@ -33,12 +33,34 @@ from m5.proxy import *
 from m5.objects.Network import RubyNetwork
 from m5.objects.BasicRouter import BasicRouter
 from m5.objects.ClockedObject import ClockedObject
+from m5.SimObject import SimObject, cxxMethod
+
+
+class GarnetNativeGraph(SimObject):
+    type = "GarnetNativeGraph"
+    cxx_header = "mem/ruby/network/garnet/NativeGraph.hh"
+    cxx_class = "gem5::ruby::garnet::NativeGraph"
+
+    records = Param.String("Validated compact topology records")
+    clocks = VectorParam.ClockDomain("Clock references for topology records")
+    endpoints = VectorParam.RubyController("Original endpoint controllers")
+    router_anchors = VectorParam.GarnetRouter("Existing clock-owning routers")
+    ext_anchors = VectorParam.GarnetExtLink("Existing bridged external links")
+    int_anchors = VectorParam.GarnetIntLink("Existing clock-owning internal links")
+    ni_anchor = Param.GarnetNetworkInterface("First real network interface")
+    lifecycle_anchors = VectorParam.SimObject("Python-owned subtree objects")
+    power_template = Param.PowerState("Original independent-state template")
+
+    @cxxMethod(return_value_policy="reference")
+    def findChild(self, name):
+        pass
 
 
 class GarnetNetwork(RubyNetwork):
     type = "GarnetNetwork"
     cxx_header = "mem/ruby/network/garnet/GarnetNetwork.hh"
     cxx_class = "gem5::ruby::garnet::GarnetNetwork"
+    native_graph = Param.GarnetNativeGraph(NULL, "Optional native topology owner")
 
     num_rows = Param.Int(0, "number of rows if 2D (mesh/torus/..) topology")
     ni_flit_size = Param.UInt32(16, "network interface flit size in bytes")

@@ -315,6 +315,8 @@ def _bindStatHierarchy(root, stat_parent=None):
             stat_parent = (root_cc_obj._statGroupHandle() if use_handles
                            else root_cc_obj)
     for name, obj in root._children.items():
+        if "_native_stat_group_labels" in root.__dict__:
+            name = root.__dict__["_native_stat_group_labels"][name]
         _bind_obj(name, obj, stat_parent)
 
 

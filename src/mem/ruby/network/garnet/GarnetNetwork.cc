@@ -43,6 +43,7 @@
 #include "mem/ruby/network/garnet/GarnetLink.hh"
 #include "mem/ruby/network/garnet/NetworkInterface.hh"
 #include "mem/ruby/network/garnet/NetworkLink.hh"
+#include "mem/ruby/network/garnet/NativeGraph.hh"
 #include "mem/ruby/network/garnet/Router.hh"
 #include "mem/ruby/system/RubySystem.hh"
 
@@ -62,6 +63,10 @@ namespace garnet
  */
 
 GarnetNetwork::GarnetNetwork(const Params &p)
+    : GarnetNetwork(p.native_graph ? p.native_graph->prepare(p) : p, PreparedGraph{})
+{}
+
+GarnetNetwork::GarnetNetwork(const Params &p, PreparedGraph)
     : Network(p)
 {
     m_num_rows = p.num_rows;
@@ -102,6 +107,9 @@ GarnetNetwork::GarnetNetwork(const Params &p)
         m_nis.push_back(ni);
         ni->init_net_ptr(this);
     }
+
+    if (p.native_graph)
+        p.native_graph->bindGroups(this);
 
     // Print Garnet version
     inform("Garnet version %s\n", garnetVersion);
@@ -150,6 +158,34 @@ GarnetNetwork::init()
             router->printFaultVector(std::cout);
         }
     }
+    const auto &p = static_cast<const Params &>(SimObject::params());
+    if (p.native_graph)
+        p.native_graph->initChildren();
+}
+
+void GarnetNetwork::initState()
+{
+    Network::initState();
+    const auto &p = static_cast<const Params &>(SimObject::params());
+    if (p.native_graph) p.native_graph->initStateChildren();
+}
+void GarnetNetwork::regProbePoints()
+{
+    Network::regProbePoints();
+    const auto &p = static_cast<const Params &>(SimObject::params());
+    if (p.native_graph) p.native_graph->probePointChildren();
+}
+void GarnetNetwork::regProbeListeners()
+{
+    Network::regProbeListeners();
+    const auto &p = static_cast<const Params &>(SimObject::params());
+    if (p.native_graph) p.native_graph->probeListenerChildren();
+}
+void GarnetNetwork::startup()
+{
+    Network::startup();
+    const auto &p = static_cast<const Params &>(SimObject::params());
+    if (p.native_graph) p.native_graph->startupChildren();
 }
 
 /*

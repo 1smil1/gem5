@@ -35,10 +35,11 @@ SimObject('GarnetLink.py', enums=['CDCType'], sim_objects=[
     'NetworkLink', 'CreditLink', 'NetworkBridge', 'GarnetIntLink',
     'GarnetExtLink'])
 SimObject('GarnetNetwork.py', sim_objects=[
-    'GarnetNetwork', 'GarnetNetworkInterface', 'GarnetRouter'])
+    'GarnetNetwork', 'GarnetNetworkInterface', 'GarnetRouter', 'GarnetNativeGraph'])
 
 Source('GarnetLink.cc')
 Source('GarnetNetwork.cc')
+Source('NativeGraph.cc')
 Source('InputUnit.cc')
 Source('NetworkInterface.cc')
 Source('NetworkLink.cc')

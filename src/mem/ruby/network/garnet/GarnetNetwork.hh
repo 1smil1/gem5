@@ -57,6 +57,7 @@ class Router;
 class NetworkLink;
 class NetworkBridge;
 class CreditLink;
+class NativeGraph;
 
 class GarnetNetwork : public Network
 {
@@ -66,6 +67,10 @@ class GarnetNetwork : public Network
     ~GarnetNetwork() = default;
 
     void init();
+    void initState() override;
+    void regProbePoints() override;
+    void regProbeListeners() override;
+    void startup() override;
 
     const char *garnetVersion = "3.0";
 
@@ -262,6 +267,8 @@ class GarnetNetwork : public Network
     std::vector<statistics::SparseHistogram *> m_ctrl_traffic_distribution;
 
   private:
+    struct PreparedGraph {};
+    GarnetNetwork(const Params &p, PreparedGraph);
     GarnetNetwork(const GarnetNetwork& obj);
     GarnetNetwork& operator=(const GarnetNetwork& obj);
 

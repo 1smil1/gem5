@@ -1180,7 +1180,7 @@ class SimObject(object, metaclass=MetaSimObject):
         # `import m5.internal.params` below makes `m5` a local binding; resolve
         # via sys.modules so the OMELET_INIT check does not depend on that local.
         report_network = (
-            type(self).__name__ == "GarnetNetwork"
+            type(self).__name__ in {"GarnetNetwork", "NativeGraphNetwork"}
             and getattr(sys.modules.get("m5"), "_omelet_init_progress", False)
         )
         if report_network:
@@ -1252,7 +1252,7 @@ class SimObject(object, metaclass=MetaSimObject):
             self._ccObject = -1
             if not self.abstract:
                 params = self.getCCParams()
-                report_network = type(self).__name__ == "GarnetNetwork" and getattr(m5, "_omelet_init_progress", False)
+                report_network = type(self).__name__ in {"GarnetNetwork", "NativeGraphNetwork"} and getattr(m5, "_omelet_init_progress", False)
                 if report_network:
                     network_started = time.monotonic()
                     print("OMELET_INIT GarnetNetwork C++ constructor started", flush=True)
