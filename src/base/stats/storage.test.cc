@@ -566,6 +566,43 @@ TEST(StatsHistStorTest, Size)
     }
 }
 
+TEST(StatsHistStorTest, EmptyPrepareAndMerge)
+{
+    statistics::HistStor::Params params(4);
+    statistics::HistStor empty(&params), sampled(&params);
+    statistics::DistData data, expected;
+    data.cvec.assign(10, 99);
+    empty.prepare(&params, data);
+    EXPECT_EQ(data.cvec, statistics::VCounter(4, 0));
+    EXPECT_EQ(data.bucket_size, 1);
+    EXPECT_EQ(data.samples, 0);
+
+    sampled.sample(80, 3);
+    sampled.prepare(&params, expected);
+    empty.add(&sampled);
+    empty.prepare(&params, data);
+    checkExpectedDistData(data, expected, false);
+
+    // Adding an empty source must still grow its range as before.
+    statistics::HistStor source(&params);
+    sampled.add(&source);
+    sampled.prepare(&params, data);
+    checkExpectedDistData(data, expected, false);
+    source.prepare(&params, data);
+    EXPECT_EQ(data.bucket_size, expected.bucket_size);
+    EXPECT_EQ(data.cvec, statistics::VCounter(4, 0));
+    EXPECT_EQ(data.samples, 0);
+
+    empty.reset(&params);
+    empty.prepare(&params, data);
+    EXPECT_EQ(data.cvec, statistics::VCounter(4, 0));
+    EXPECT_EQ(data.bucket_size, 1);
+    empty.sample(-1, 2);
+    empty.prepare(&params, data);
+    EXPECT_EQ(data.samples, 2);
+    EXPECT_EQ(data.sum, -2);
+}
+
 /**
  * Auxiliary function that finishes preparing the HistStor's expected values,
  * perform the calls to the storage's sample, and compares the expected data.

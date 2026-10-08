@@ -405,6 +405,8 @@ class DistStor
 class HistStor
 {
   private:
+    /** Logical bucket count; empty storage still represents all zero buckets. */
+    size_type numBuckets;
     /** Lower bound of the first bucket's range. */
     Counter min_bucket;
     /** Lower bound of the last bucket's range. */
@@ -422,6 +424,12 @@ class HistStor
     Counter samples;
     /** Counter for each bucket. */
     VCounter cvec;
+
+    void ensureBuckets()
+    {
+        if (cvec.empty())
+            cvec.assign(numBuckets, Counter());
+    }
 
     /**
      * Given a bucket size B, and a range of values [0, N], this function
@@ -478,7 +486,7 @@ class HistStor
     };
 
     HistStor(const StorageParams* const storage_params)
-        : cvec(safe_cast<const Params *>(storage_params)->buckets)
+        : numBuckets(safe_cast<const Params *>(storage_params)->buckets)
     {
         reset(storage_params);
     }
@@ -500,7 +508,7 @@ class HistStor
      * Return the number of buckets in this distribution.
      * @return the number of buckets.
      */
-    size_type size() const { return cvec.size(); }
+    size_type size() const { return numBuckets; }
 
     /**
      * Returns true if any calls to sample have been made.
@@ -518,6 +526,7 @@ class HistStor
         const Params *params = safe_cast<const Params *>(storage_params);
 
         assert(params->type == Hist);
+        assert(params->buckets == numBuckets);
         data.type = params->type;
         data.min = min_bucket;
         data.max = max_bucket + bucket_size - 1;
@@ -527,9 +536,13 @@ class HistStor
         data.max_val = max_bucket;
 
         int buckets = params->buckets;
-        data.cvec.resize(buckets);
-        for (off_type i = 0; i < buckets; ++i)
-            data.cvec[i] = cvec[i];
+        if (cvec.empty()) {
+            data.cvec.assign(buckets, Counter());
+        } else {
+            data.cvec.resize(buckets);
+            for (off_type i = 0; i < buckets; ++i)
+                data.cvec[i] = cvec[i];
+        }
 
         data.sum = sum;
         data.logs = logs;
@@ -544,6 +557,7 @@ class HistStor
     reset(const StorageParams* const storage_params)
     {
         const Params *params = safe_cast<const Params *>(storage_params);
+        assert(params->buckets == numBuckets);
         min_bucket = 0;
         max_bucket = params->buckets - 1;
         bucket_size = 1;

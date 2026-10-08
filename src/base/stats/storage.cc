@@ -178,6 +178,7 @@ HistStor::growUp()
 void
 HistStor::sample(Counter val, int number)
 {
+    ensureBuckets();
     assert(min_bucket < max_bucket);
     if (val < min_bucket) {
         if (min_bucket == 0)
@@ -214,6 +215,10 @@ HistStor::add(HistStor *hs)
     int b_size = hs->size();
     assert(size() == b_size);
     assert(min_bucket == hs->min_bucket);
+
+    // Keep the original range alignment, including mutation of the source.
+    ensureBuckets();
+    hs->ensureBuckets();
 
     sum += hs->sum;
     logs += hs->logs;

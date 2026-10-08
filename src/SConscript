@@ -644,7 +644,9 @@ envs = {
 }
 
 envs['debug'].Append(CPPDEFINES=['DEBUG', 'TRACING_ON=1'])
-envs['opt'].Append(CCFLAGS=['-g'], CPPDEFINES=['TRACING_ON=1'])
+# Windows build entry strips DWARF anyway; avoid allocating it in the linker.
+envs['opt'].Append(CCFLAGS=['-g0' if sys.platform == 'cygwin' else '-g'],
+                   CPPDEFINES=['TRACING_ON=1'])
 envs['fast'].Append(CPPDEFINES=['NDEBUG', 'TRACING_ON=0'])
 
 # For Link Time Optimization, the optimisation flags used to compile
