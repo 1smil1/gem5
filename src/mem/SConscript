@@ -40,6 +40,8 @@
 
 Import('*')
 
+GTest('requestor_id.test', 'requestor_id.test.cc')
+
 SimObject('CommMonitor.py', sim_objects=['CommMonitor'])
 Source('comm_monitor.cc')
 

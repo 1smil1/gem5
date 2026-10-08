@@ -501,6 +501,8 @@ System::_getRequestorId(const SimObject* requestor,
     }
 
     // Generate a new RequestorID incrementally
+    fatal_if(requestors.size() >= Request::invldRequestorId,
+             "Requestor ID capacity exhausted before registering %s", name);
     RequestorID requestor_id = requestors.size();
 
     // Append the new Requestor metadata to the group of system Requestors.

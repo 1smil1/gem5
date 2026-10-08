@@ -92,7 +92,9 @@ class Request;
 class ThreadContext;
 
 typedef std::shared_ptr<Request> RequestPtr;
-typedef uint16_t RequestorID;
+// Large standalone networks register CPUs and both endpoint controllers.
+// Keep their identities distinct beyond the old 65535-requestor limit.
+typedef uint32_t RequestorID;
 
 class Request
 {
