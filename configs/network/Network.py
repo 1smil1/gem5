@@ -1,9 +1,37 @@
 
 import math
+import os
 import m5
 from m5.objects import *
 from m5.defines import buildEnv
 from m5.util import addToPath, fatal, warn
+from m5.params import NULL
+from m5.proxy import Parent
+
+
+class NativeGarnetIntLink(GarnetIntLink):
+    network_link = NULL
+    credit_link = NULL
+    native_children = True
+    native_link_clock = Parent.clk_domain
+    native_power_template = Parent.online_power_state_template
+
+
+class NativeGarnetExtLink(GarnetExtLink):
+    network_links = []
+    credit_links = []
+    native_children = True
+    native_link_clock = Parent.clk_domain
+    native_power_template = Parent.online_power_state_template
+
+
+# Overriding a SimObject parameter does not remove its inherited class child.
+# Hide only these defaults on the native subclasses before any cloning occurs.
+for cls, names in ((NativeGarnetIntLink, ("network_link", "credit_link")),
+                   (NativeGarnetExtLink, ("network_links", "credit_links"))):
+    for name in names:
+        if name in cls._children:
+            del cls._children[name]
 
 
 def define_options(parser):
@@ -218,6 +246,34 @@ def create_network(options, ruby):
         NetworkClass = GarnetNetwork
         IntLinkClass = GarnetIntLink
         ExtLinkClass = GarnetExtLink
+        if (options.topology in {"mesh_nox", "irregular_nox", "nox3d_mesh"}
+                and os.environ.get("OMELET_COMM_DUMP_STATS") == "0"):
+            # Absent bridge flags use Garnet's declared False defaults. CDC /
+            # SerDes links retain Python children referenced by NetworkBridge.
+            def IntLinkClass(**parameters):
+                bridged = any(parameters.get(flag, False) for flag in
+                              ("src_cdc", "dst_cdc", "src_serdes", "dst_serdes"))
+                cls = GarnetIntLink if bridged else NativeGarnetIntLink
+                # Legacy BasicLink rejects a non-parameter clock child if it
+                # already has a parent; its link children then inherit above
+                # the link. An orphan clock is owned by the link instead.
+                if not bridged:
+                    clock = parameters.pop("clk_domain")
+                    if not clock.has_parent():
+                        parameters["clk_domain"] = clock
+                        parameters["native_link_clock"] = clock
+                return cls(**parameters)
+
+            def ExtLinkClass(**parameters):
+                bridged = any(parameters.get(flag, False) for flag in
+                              ("ext_cdc", "int_cdc", "ext_serdes", "int_serdes"))
+                cls = GarnetExtLink if bridged else NativeGarnetExtLink
+                if not bridged:
+                    clock = parameters.pop("clk_domain")
+                    if not clock.has_parent():
+                        parameters["clk_domain"] = clock
+                        parameters["native_link_clock"] = clock
+                return cls(**parameters)
         RouterClass = GarnetRouter
         InterfaceClass = GarnetNetworkInterface
 

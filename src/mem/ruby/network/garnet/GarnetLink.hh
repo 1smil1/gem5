@@ -32,6 +32,7 @@
 #define __MEM_RUBY_NETWORK_GARNET_0_GARNETLINK_HH__
 
 #include <iostream>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -64,6 +65,10 @@ class GarnetIntLink : public BasicIntLink
     friend class GarnetNetwork;
 
   protected:
+    std::unique_ptr<NetworkLinkParams> nativeNetworkParams;
+    std::unique_ptr<CreditLinkParams> nativeCreditParams;
+    std::unique_ptr<NetworkLink> nativeNetwork;
+    std::unique_ptr<CreditLink> nativeCredit;
     NetworkLink* m_network_link;
     CreditLink* m_credit_link;
 
@@ -104,6 +109,10 @@ class GarnetExtLink : public BasicExtLink
     friend class GarnetNetwork;
 
   protected:
+    std::unique_ptr<NetworkLinkParams> nativeNetworkParams[2];
+    std::unique_ptr<CreditLinkParams> nativeCreditParams[2];
+    std::unique_ptr<NetworkLink> nativeNetworks[2];
+    std::unique_ptr<CreditLink> nativeCredits[2];
     bool extBridgeEn;
     bool intBridgeEn;
 

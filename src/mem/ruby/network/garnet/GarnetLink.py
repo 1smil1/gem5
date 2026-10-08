@@ -94,6 +94,11 @@ class GarnetIntLink(BasicIntLink):
     # and one backward flow-control link (for credit)
     network_link = Param.NetworkLink(NetworkLink(), "forward link")
     credit_link = Param.CreditLink(CreditLink(), "backward flow-control link")
+    native_children = Param.Bool(False, "Create unbridged link children in C++")
+    native_link_clock = Param.ClockDomain(NULL, "Clock for native link children")
+    native_power_template = Param.PowerState(NULL, "PowerState parameter template")
+    native_vcs = Param.Int(Parent.vcs_per_vnet, "Native child VC count")
+    native_vnets = Param.Int(Parent.number_of_virtual_networks, "Native child vnet count")
 
     # The src_cdc and dst_cdc flags are used to enable the
     # clock domain crossing(CDC) at the source and destination
@@ -151,6 +156,11 @@ class GarnetExtLink(BasicExtLink):
     # Out uni-directional link
     _cls.append(CreditLink())
     credit_links = VectorParam.CreditLink(_cls, "backward flow-control links")
+    native_children = Param.Bool(False, "Create unbridged link children in C++")
+    native_link_clock = Param.ClockDomain(NULL, "Clock for native link children")
+    native_power_template = Param.PowerState(NULL, "PowerState parameter template")
+    native_vcs = Param.Int(Parent.vcs_per_vnet, "Native child VC count")
+    native_vnets = Param.Int(Parent.number_of_virtual_networks, "Native child vnet count")
 
     # The ext_cdc and intt_cdc flags are used to enable the
     # clock domain crossing(CDC) at the external and internal

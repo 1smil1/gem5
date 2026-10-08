@@ -44,13 +44,60 @@ namespace ruby
 namespace garnet
 {
 
+namespace {
+
+template<class ChildParams, class LinkParams>
+std::unique_ptr<ChildParams>
+nativeLinkParams(const LinkParams &p, const std::string &child_name)
+{
+    fatal_if(!p.native_link_clock || !p.native_power_template ||
+             p.native_vcs <= 0 || p.native_vnets <= 0,
+             "Native link children require clock, power template and VC/vnet counts");
+    auto child = std::make_unique<ChildParams>();
+    child->name = p.name + "." + child_name;
+    child->eventq_index = p.eventq_index;
+    child->clk_domain = p.native_link_clock;
+    child->native_power_state = true;
+    child->power_state = p.native_power_template;
+    child->link_id = p.link_id;
+    child->link_latency = p.latency;
+    child->serdes_latency = p.serdes_latency;
+    child->is_off_chip = p.is_off_chip;
+    child->vcs_per_vnet = p.native_vcs;
+    child->virt_nets = p.native_vnets;
+    child->supported_vnets = p.supported_vnets;
+    child->width = p.width;
+    child->onchip_component_latency = p.onchip_component_latency;
+    child->offchip_component_latency = p.offchip_component_latency;
+    child->serdes_component_latency = p.serdes_component_latency;
+    return child;
+}
+
+} // anonymous namespace
+
 GarnetIntLink::GarnetIntLink(const Params &p)
     : BasicIntLink(p)
 {
     // Uni-directional
 
-    m_network_link = p.network_link;
-    m_credit_link = p.credit_link;
+    if (p.native_children) {
+        fatal_if(p.src_cdc || p.dst_cdc || p.src_serdes || p.dst_serdes ||
+                 p.network_link || p.credit_link,
+                 "Native internal link children require unbridged null child parameters");
+        nativeNetworkParams = nativeLinkParams<NetworkLinkParams>(p, "network_link");
+        nativeCreditParams = nativeLinkParams<CreditLinkParams>(p, "credit_link");
+        nativeNetwork = std::make_unique<NetworkLink>(*nativeNetworkParams);
+        nativeCredit = std::make_unique<CreditLink>(*nativeCreditParams);
+        m_network_link = nativeNetwork.get();
+        m_credit_link = nativeCredit.get();
+        addStatGroup("network_link", m_network_link);
+        addStatGroup("credit_link", m_credit_link);
+    } else {
+        fatal_if(!p.network_link || !p.credit_link,
+                 "Internal link requires both network and credit children");
+        m_network_link = p.network_link;
+        m_credit_link = p.credit_link;
+    }
 
     srcCdcEn = p.src_cdc;
     dstCdcEn = p.dst_cdc;
@@ -100,13 +147,30 @@ GarnetExtLink::GarnetExtLink(const Params &p)
 {
     // Bi-directional
 
-    // In
-    m_network_links[0] = p.network_links[0];
-    m_credit_links[0] = p.credit_links[0];
-
-    // Out
-    m_network_links[1] = p.network_links[1];
-    m_credit_links[1] = p.credit_links[1];
+    if (p.native_children) {
+        fatal_if(p.ext_cdc || p.int_cdc || p.ext_serdes || p.int_serdes ||
+                 !p.network_links.empty() || !p.credit_links.empty(),
+                 "Native external link children require unbridged empty child parameters");
+        for (int direction = 0; direction < 2; ++direction) {
+            const auto network_name = "network_links" + std::to_string(direction);
+            const auto credit_name = "credit_links" + std::to_string(direction);
+            nativeNetworkParams[direction] = nativeLinkParams<NetworkLinkParams>(p, network_name);
+            nativeCreditParams[direction] = nativeLinkParams<CreditLinkParams>(p, credit_name);
+            nativeNetworks[direction] = std::make_unique<NetworkLink>(*nativeNetworkParams[direction]);
+            nativeCredits[direction] = std::make_unique<CreditLink>(*nativeCreditParams[direction]);
+            m_network_links[direction] = nativeNetworks[direction].get();
+            m_credit_links[direction] = nativeCredits[direction].get();
+            addStatGroup(network_name.c_str(), m_network_links[direction]);
+            addStatGroup(credit_name.c_str(), m_credit_links[direction]);
+        }
+    } else {
+        fatal_if(p.network_links.size() != 2 || p.credit_links.size() != 2,
+                 "External link requires two network and two credit children");
+        for (int direction = 0; direction < 2; ++direction) {
+            m_network_links[direction] = p.network_links[direction];
+            m_credit_links[direction] = p.credit_links[direction];
+        }
+    }
 
 
     extCdcEn = p.ext_cdc;
