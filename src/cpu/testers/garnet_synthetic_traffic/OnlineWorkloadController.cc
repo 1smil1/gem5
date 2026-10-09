@@ -391,7 +391,7 @@ OnlineWorkloadController::run(const std::string &manifest,
         std::ifstream input(position);
         if (!input)
             throw std::runtime_error("cannot open Omelet position file: " + position);
-        int node, x, y, pyChip, nocChip, cnode;
+        int node, x, y, z, pyChip, nocChip, cnode;
         std::string kind;
         std::string line;
         while (std::getline(input, line)) {
@@ -399,14 +399,22 @@ OnlineWorkloadController::run(const std::string &manifest,
             if (first == std::string::npos || line[first] == '#')
                 continue;
             std::istringstream row(line.substr(first));
-            if (!(row >> node >> x >> y >> pyChip >> nocChip >> kind >> cnode))
+            std::vector<std::string> columns;
+            std::string column;
+            while (row >> column) columns.push_back(column);
+            if (columns.size() == 7) columns.insert(columns.begin() + 3, "0");
+            if (columns.size() != 8)
                 throw std::runtime_error("malformed Omelet position row: " + line);
-            if (node < 0 || cnode < 0)
+            node = std::stoi(columns[0]); x = std::stoi(columns[1]); y = std::stoi(columns[2]);
+            z = std::stoi(columns[3]); pyChip = std::stoi(columns[4]); nocChip = std::stoi(columns[5]);
+            kind = columns[6]; cnode = std::stoi(columns[7]);
+            if (node < 0 || cnode < 0 || x < 0 || y < 0 || z < 0 || (kind != "real" && kind != "virtual"))
                 throw std::runtime_error("negative node in position file");
             if (nocChip < 0)
                 continue;
             int router = node;
             if (nonuniform_grid.empty()) {
+                if (z != 0) throw std::runtime_error("3D requires explicit routing grid");
                 if (k_node <= 0 || k_chip <= 0)
                     throw std::runtime_error("invalid uniform Omelet grid dimensions");
                 const int chipX = x / k_node;
@@ -422,8 +430,10 @@ OnlineWorkloadController::run(const std::string &manifest,
                 const auto origin = intArray(chip, "origin");
                 const auto shape = intArray(chip, "grid");
                 const int baseId = intField(chip, "node_id_base");
-                if (origin.size() != 2 || shape.size() != 2 || shape[0] <= 0 || shape[1] <= 0)
+                if ((origin.size() != 2 && origin.size() != 3) || shape.size() != 2 || shape[0] <= 0 || shape[1] <= 0)
                     throw std::runtime_error("invalid nonuniform grid entry");
+                if ((origin.size() == 2 ? 0 : origin[2]) != z)
+                    throw std::runtime_error("position z disagrees with grid origin");
                 const int localX = x - origin[0];
                 const int localY = y - origin[1];
                 if (localX < 0 || localY < 0 || localX >= shape[0] || localY >= shape[1])
