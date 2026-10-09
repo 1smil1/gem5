@@ -330,22 +330,30 @@ def init_network(options, network, InterfaceClass):
                     link=intLink.network_link,
                     vtype="OBJECT_LINK",
                     width=intLink.src_node.width,
+                    cdc_latency=intLink.native_bridge_cdc_latency,
+                    serdes_latency=intLink.native_bridge_serdes_latency,
                 )
                 intLink.src_cred_bridge = NetworkBridge(
                     link=intLink.credit_link,
                     vtype="LINK_OBJECT",
                     width=intLink.src_node.width,
+                    cdc_latency=intLink.native_bridge_cdc_latency,
+                    serdes_latency=intLink.native_bridge_serdes_latency,
                 )
             if intLink.dst_cdc or intLink.dst_serdes:
                 intLink.dst_net_bridge = NetworkBridge(
                     link=intLink.network_link,
                     vtype="LINK_OBJECT",
                     width=intLink.dst_node.width,
+                    cdc_latency=intLink.native_bridge_cdc_latency,
+                    serdes_latency=intLink.native_bridge_serdes_latency,
                 )
                 intLink.dst_cred_bridge = NetworkBridge(
                     link=intLink.credit_link,
                     vtype="OBJECT_LINK",
                     width=intLink.dst_node.width,
+                    cdc_latency=intLink.native_bridge_cdc_latency,
+                    serdes_latency=intLink.native_bridge_serdes_latency,
                 )
 
         for extLink in network.ext_links:
