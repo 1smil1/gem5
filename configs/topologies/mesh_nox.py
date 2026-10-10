@@ -187,20 +187,25 @@ class mesh_nox(SimpleTopology):
 
         if self.nonuniform_grid is not None and self.nonuniform_grid["grid_shape"][2] > 1:
             grid = self.nonuniform_grid
+            from omelet.nox.vertical import resolve_vertical_method, vertical_ports, vertical_port_width
+            requested = self.sys_cfg.get('vertical_interconnect_method',0) if opts.vertical_interconnect_method is None else opts.vertical_interconnect_method
+            method = resolve_vertical_method(grid, requested)
+            progress(f'vertical-interconnect-method={method}')
             plane = grid["grid_shape"][0] * grid["grid_shape"][1]
             pairs = len(grid["chiplets"]) - plane
             progress(f"creating NoL vertical links 0/{pairs} chiplet_pairs")
             for upper in range(plane, len(grid["chiplets"])):
                 lower = upper - plane
-                width, height = grid["chiplets"][str(upper)]["grid"]
-                for local in range(width * height):
-                    a = router_map[f"chiplet{lower}"][local]
-                    b = router_map[f"chiplet{upper}"][local]
+                ports = vertical_ports(grid['chiplets'][str(lower)]['grid'],grid['chiplets'][str(upper)]['grid'],method)
+                via_width = vertical_port_width(self.sys_cfg,self.plc_cfg,f'chiplet{lower}',f'chiplet{upper}',len(ports),opts.c2c_bonding) if method == 1 else None
+                for lo, hi in ports:
+                    a = router_map[f"chiplet{lower}"][lo]
+                    b = router_map[f"chiplet{upper}"][hi]
                     for src, dst, outport, inport in ((a, b, "NoLUp", "NoLDown"), (b, a, "NoLDown", "NoLUp")):
                         int_links.append(make_link(opts=opts, tech=self.link_lib,
                             sys_cfg=self.sys_cfg, plc_cfg=self.plc_cfg, nox_cfg=self.noc_cfg[upper],
                             IntLinks=IntLink, lid=link_cnt, src_router=net.routers[src],
-                            dst_router=net.routers[dst], src_outport=outport, dst_inport=inport, length=None))
+                            dst_router=net.routers[dst], src_outport=outport, dst_inport=inport, length=None, via_width=via_width))
                         link_cnt += 1
                 if (upper - plane + 1) % 100 == 0 or upper == len(grid["chiplets"]) - 1:
                     progress(f"creating NoL vertical links {upper-plane+1}/{pairs} chiplet_pairs")

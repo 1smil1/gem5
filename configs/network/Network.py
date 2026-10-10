@@ -232,6 +232,9 @@ def define_options(parser):
         help="""3D: chip-to-chip (NoL/via) bonding for vertical links. Only read by nox3d_* topologies.""",
     )
 
+    parser.add_argument('--vertical-interconnect-method', type=int, choices=(0,1), default=None,
+                        help='0=native matching routers; 1=uniform mapped vertical ports; inherits network YAML')
+
 def create_network(options, ruby):
 
     if options.network == "garnet2.0":

@@ -148,6 +148,21 @@ class nox3d_mesh(SimpleTopology):
                 bot_chiplet = z_map[z_bot]
                 vertical_pairs.append((top_chiplet, bot_chiplet))
 
+        from omelet.nox.vertical import resolve_vertical_method
+        if vertical_pairs:
+            def local_grid(name):
+                rows = self.noc_cfg[int(name.replace('chiplet',''))]['mesh_rows']
+                count = self.sys_cfg['noc_routers_per_chiplet'][name]
+                if count % rows:
+                    raise ValueError('NoC router count must divide mesh_rows')
+                return [count//rows,rows]
+            count = len(vertical_pairs)
+            probe = {'grid_shape':[count,1,2], 'chiplets':{
+                str(i):{'grid':local_grid(pair[1])} for i,pair in enumerate(vertical_pairs)}}
+            probe['chiplets'].update({str(i+count):{'grid':local_grid(pair[0])} for i,pair in enumerate(vertical_pairs)})
+            requested = self.sys_cfg.get('vertical_interconnect_method',0) if opts.vertical_interconnect_method is None else opts.vertical_interconnect_method
+            opts.vertical_interconnect_method = resolve_vertical_method(probe,requested)
+
         for pair_i, (top_chiplet, bot_chiplet) in enumerate(vertical_pairs):
             intra_int, num_new_links = build_vertical_inter_chiplet(
                 opts, self.link_lib,
