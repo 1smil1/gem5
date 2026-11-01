@@ -118,6 +118,28 @@ RoutingUnit::lookupRoutingTable(int vnet, NetDest msg_destination,
                          const char *prefix) {
         return direction.rfind(prefix, 0) == 0;
     };
+    bool has_direct_destination_up = false;
+    if (m_router->role() == "interposer" &&
+        src_router >= 0 && dest_router >= 0) {
+        auto *network = m_router->get_net_ptr();
+        for (int link = 0; link < m_routing_table[vnet].size(); ++link) {
+            const auto &direction = m_outports_idx2dirn.at(link);
+            if (!startsWith(direction, "Up") ||
+                !msg_destination.intersectionIsNotEmpty(
+                    m_routing_table[vnet][link]))
+                continue;
+            const char *suffix = direction.c_str() + 2;
+            char *end = nullptr;
+            long target_id = std::strtol(suffix, &end, 10);
+            if (end != suffix && *end == '\0' && target_id >= 0 &&
+                target_id < network->getNumRouters() &&
+                network->getRouter(static_cast<int>(target_id))->role() ==
+                    network->getRouter(dest_router)->role()) {
+                has_direct_destination_up = true;
+                break;
+            }
+        }
+    }
     auto forbiddenHierarchicalUturn = [&](const PortDirection &outport_dirn) {
         if (!hierarchical_escape)
             return false;
@@ -132,16 +154,23 @@ RoutingUnit::lookupRoutingTable(int vnet, NetDest msg_destination,
         // A same-chiplet packet stays in its NoC.  A cross-chiplet packet
         // leaves the source NoC once and may not use a NoC as an interposer.
         if (startsWith(outport_dirn, "Down")) {
-            if (m_router->role() != src_role)
+            // A 3D packet may enter an intermediate chiplet through NoL and
+            // then descend into NoI.  Only a packet that already entered
+            // this NoC from NoI must not return to NoI.
+            if (m_router->role() != src_role && inport_dirn == "Down")
                 return true;
         }
 
         // NoI is the only inter-chiplet fabric.  Once a packet is in NoI,
         // its next NoC hop must be in the destination chiplet.  This blocks
         // NoI -> source NoC -> ... -> the same NoI channel cycles while
-        // preserving source-NoC -> NoI -> destination-NoC paths.
+        // preserving source-NoC -> NoI -> destination-NoC paths.  In 3D,
+        // the destination may be above the NoI plane, so the route table may
+        // intentionally enter a lower chiplet first and continue through NoL.
         if (m_router->role() == "interposer" &&
             startsWith(outport_dirn, "Up")) {
+            if (!has_direct_destination_up)
+                return false;
             const char *suffix = outport_dirn.c_str() + 2;
             char *end = nullptr;
             long target_id = std::strtol(suffix, &end, 10);
