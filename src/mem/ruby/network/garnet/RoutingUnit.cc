@@ -30,6 +30,8 @@
 
 #include "mem/ruby/network/garnet/RoutingUnit.hh"
 
+#include <cstdlib>
+
 #include "base/cast.hh"
 #include "base/compiler.hh"
 #include "debug/RubyNetwork.hh"
@@ -94,7 +96,9 @@ RoutingUnit::supportsVnet(int vnet, std::vector<int> sVnets)
  * Correct weight assignments are critical to provide deadlock avoidance.
  */
 int
-RoutingUnit::lookupRoutingTable(int vnet, NetDest msg_destination)
+RoutingUnit::lookupRoutingTable(int vnet, NetDest msg_destination,
+                                PortDirection inport_dirn,
+                                int src_router, int dest_router)
 {
     // First find all possible output link candidates
     // For ordered vnet, just choose the first
@@ -108,10 +112,55 @@ RoutingUnit::lookupRoutingTable(int vnet, NetDest msg_destination)
     std::vector<int> output_link_candidates;
     int num_candidates = 0;
 
+    const bool hierarchical_escape =
+        std::getenv("OMELET_DETERMINISTIC_ROUTES") != nullptr;
+    auto startsWith = [](const PortDirection &direction,
+                         const char *prefix) {
+        return direction.rfind(prefix, 0) == 0;
+    };
+    auto forbiddenHierarchicalUturn = [&](const PortDirection &outport_dirn) {
+        if (!hierarchical_escape)
+            return false;
+
+        if (src_router < 0 || dest_router < 0)
+            return false;
+
+        auto *network = m_router->get_net_ptr();
+        const auto &src_role = network->getRouter(src_router)->role();
+        const auto &dst_role = network->getRouter(dest_router)->role();
+
+        // A same-chiplet packet stays in its NoC.  A cross-chiplet packet
+        // leaves the source NoC once and may not use a NoC as an interposer.
+        if (startsWith(outport_dirn, "Down")) {
+            if (m_router->role() != src_role)
+                return true;
+        }
+
+        // NoI is the only inter-chiplet fabric.  Once a packet is in NoI,
+        // its next NoC hop must be in the destination chiplet.  This blocks
+        // NoI -> source NoC -> ... -> the same NoI channel cycles while
+        // preserving source-NoC -> NoI -> destination-NoC paths.
+        if (m_router->role() == "interposer" &&
+            startsWith(outport_dirn, "Up")) {
+            const char *suffix = outport_dirn.c_str() + 2;
+            char *end = nullptr;
+            long target_id = std::strtol(suffix, &end, 10);
+            if (end == suffix || *end != '\0' || target_id < 0 ||
+                target_id >= network->getNumRouters() ||
+                network->getRouter(static_cast<int>(target_id))->role() !=
+                    dst_role)
+                return true;
+        }
+        return false;
+    };
+
     // Identify the minimum weight among the candidate output links
     for (int link = 0; link < m_routing_table[vnet].size(); link++) {
         if (msg_destination.intersectionIsNotEmpty(
             m_routing_table[vnet][link])) {
+            auto direction = m_outports_idx2dirn.at(link);
+            if (forbiddenHierarchicalUturn(direction))
+                continue;
 
         if (m_weight_table[link] <= min_weight)
             min_weight = m_weight_table[link];
@@ -122,6 +171,9 @@ RoutingUnit::lookupRoutingTable(int vnet, NetDest msg_destination)
     for (int link = 0; link < m_routing_table[vnet].size(); link++) {
         if (msg_destination.intersectionIsNotEmpty(
             m_routing_table[vnet][link])) {
+            auto direction = m_outports_idx2dirn.at(link);
+            if (forbiddenHierarchicalUturn(direction))
+                continue;
 
             if (m_weight_table[link] == min_weight) {
                 num_candidates++;
@@ -131,13 +183,43 @@ RoutingUnit::lookupRoutingTable(int vnet, NetDest msg_destination)
     }
 
     if (output_link_candidates.size() == 0) {
+        if (std::getenv("OMELET_ROUTE_DEBUG") != nullptr) {
+            auto *network = m_router->get_net_ptr();
+            const auto &src_role = network->getRouter(src_router)->role();
+            const auto &dst_role = network->getRouter(dest_router)->role();
+            std::cerr << "OMELET_ROUTE_DEBUG no-route"
+                      << " router=" << m_router->get_id()
+                      << " role=" << m_router->role()
+                      << " src=" << src_router
+                      << " src_role=" << src_role
+                      << " dst=" << dest_router
+                      << " dst_role=" << dst_role
+                      << " in=" << inport_dirn << std::endl;
+            for (int link = 0; link < m_routing_table[vnet].size();
+                 ++link) {
+                if (msg_destination.intersectionIsNotEmpty(
+                        m_routing_table[vnet][link])) {
+                    std::cerr << "  candidate link=" << link
+                              << " dir=" << m_outports_idx2dirn.at(link)
+                              << " weight=" << m_weight_table[link]
+                              << " filtered="
+                              << forbiddenHierarchicalUturn(
+                                     m_outports_idx2dirn.at(link))
+                              << std::endl;
+                }
+            }
+        }
         fatal("Fatal Error:: No Route exists from this Router.");
         exit(0);
     }
 
-    // Randomly select any candidate output link
+    // Online Omelet workloads use stable shortest-path tie-breaking. Keep
+    // ordinary Garnet's randomized choice unless explicitly enabled.
     int candidate = 0;
-    if (!(m_router->get_net_ptr())->isVNetOrdered(vnet))
+    const bool deterministic_online =
+        std::getenv("OMELET_DETERMINISTIC_ROUTES") != nullptr;
+    if (!(m_router->get_net_ptr())->isVNetOrdered(vnet) &&
+        !deterministic_online)
         candidate = rand() % num_candidates;
 
     output_link = output_link_candidates.at(candidate);
@@ -176,7 +258,9 @@ RoutingUnit::outportCompute(RouteInfo route, int inport,
         // Multiple NIs may be connected to this router,
         // all with output port direction = "Local"
         // Get exact outport id from table
-        outport = lookupRoutingTable(route.vnet, route.net_dest);
+        outport = lookupRoutingTable(route.vnet, route.net_dest,
+                                     inport_dirn, route.src_router,
+                                     route.dest_router);
         return outport;
     }
 
@@ -187,14 +271,18 @@ RoutingUnit::outportCompute(RouteInfo route, int inport,
 
     switch (routing_algorithm) {
         case TABLE_:  outport =
-            lookupRoutingTable(route.vnet, route.net_dest); break;
+            lookupRoutingTable(route.vnet, route.net_dest,
+                               inport_dirn, route.src_router,
+                               route.dest_router); break;
         case XY_:     outport =
             outportComputeXY(route, inport, inport_dirn); break;
         // any custom algorithm
         case CUSTOM_: outport =
             outportComputeCustom(route, inport, inport_dirn); break;
         default: outport =
-            lookupRoutingTable(route.vnet, route.net_dest); break;
+            lookupRoutingTable(route.vnet, route.net_dest,
+                               inport_dirn, route.src_router,
+                               route.dest_router); break;
     }
 
     assert(outport != -1);

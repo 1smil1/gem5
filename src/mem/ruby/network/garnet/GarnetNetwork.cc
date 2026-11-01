@@ -408,6 +408,13 @@ GarnetNetwork::getNumRouters()
     return m_routers.size();
 }
 
+Router *
+GarnetNetwork::getRouter(int id) const
+{
+    assert(id >= 0 && id < m_routers.size());
+    return m_routers[id];
+}
+
 // Get ID of router connected to a NI.
 int
 GarnetNetwork::get_router_id(int global_ni, int vnet)

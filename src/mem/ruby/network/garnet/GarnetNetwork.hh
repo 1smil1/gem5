@@ -98,6 +98,7 @@ class GarnetNetwork : public Network
         return m_vnet_type[vnet];
     }
     int getNumRouters();
+    Router *getRouter(int id) const;
     int get_router_id(int ni, int vnet);
 
 
