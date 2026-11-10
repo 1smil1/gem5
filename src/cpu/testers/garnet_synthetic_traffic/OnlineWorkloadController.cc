@@ -345,7 +345,13 @@ OnlineWorkloadController::run(const std::string &manifest,
     std::unordered_map<int, int> byPhysical;
     std::unordered_map<int, int> byCnode;
     std::unordered_map<int, int> virtualPhysical;
+    std::unordered_map<int, int> virtualLayer;
     std::unordered_map<int, CatalogLayer> catalogLayers;
+    const char *borrowing = std::getenv("OMELET_AUTO_REUSE_ALLOW_CROSS_GROUP");
+    if (borrowing && std::strcmp(borrowing, "0") && std::strcmp(borrowing, "1"))
+        throw std::runtime_error("OMELET_AUTO_REUSE_ALLOW_CROSS_GROUP must be 0 or 1");
+    const bool allowCrossGroup = borrowing && std::strcmp(borrowing, "1") == 0;
+    bool dynamicReuse = false;
     const char *preference = std::getenv("OMELET_AUTO_REUSE_USE_ENCODING");
     if (preference && std::strcmp(preference, "0") && std::strcmp(preference, "1"))
         throw std::runtime_error("OMELET_AUTO_REUSE_USE_ENCODING must be 0 or 1");
@@ -357,7 +363,11 @@ OnlineWorkloadController::run(const std::string &manifest,
         std::stringstream catalogBuffer;
         catalogBuffer << catalogStream.rdbuf();
         const Json catalogRoot = JsonParser(catalogBuffer.str()).parse();
-        preferEncoding = preferEncoding && intField(catalogRoot, "auto_reuse") == 1;
+        const int autoReuse = intField(catalogRoot, "auto_reuse");
+        if (autoReuse != 0 && autoReuse != 1)
+            throw std::runtime_error("catalog auto_reuse must be 0 or 1");
+        dynamicReuse = autoReuse == 1;
+        preferEncoding = preferEncoding && dynamicReuse;
         for (const Json &tile : field(catalogRoot, "virtual_tiles").array)
             virtualPhysical.emplace(intField(tile, "virtual_id"), intField(tile, "physical_id"));
         for (const Json &item : field(catalogRoot, "layers").array) {
@@ -381,11 +391,33 @@ OnlineWorkloadController::run(const std::string &manifest,
             }
             if (layer.virtualIds.size() != layer.canonical.size())
                 throw std::runtime_error("catalog layer virtual/canonical size mismatch");
+            if (layer.candidates.empty())
+                throw std::runtime_error("catalog layer has no candidates");
+            for (const auto &candidate : layer.candidates) {
+                if (candidate.size() != layer.virtualIds.size())
+                    throw std::runtime_error("catalog candidate size mismatch");
+                for (const int resource : candidate)
+                    if (resource < 0 || resource >= numResources)
+                        throw std::runtime_error("catalog resource out of range");
+            }
             if (preferEncoding && layer.block >= 0 &&
                 std::find(layer.candidates.begin(), layer.candidates.end(),
                           layer.canonical) == layer.candidates.end())
                 throw std::runtime_error("encoded reuse resources missing from catalog candidates");
-            catalogLayers.emplace(intField(item, "layer_id"), std::move(layer));
+            const int layerId = intField(item, "layer_id");
+            for (const int endpoint : layer.virtualIds)
+                if (!virtualLayer.emplace(endpoint, layerId).second)
+                    throw std::runtime_error("duplicate catalog virtual endpoint");
+            if (!catalogLayers.emplace(layerId, std::move(layer)).second)
+                throw std::runtime_error("duplicate catalog layer");
+        }
+        std::map<int, size_t> blockPoolCounts;
+        for (const auto &item : catalogLayers) {
+            const CatalogLayer &layer = item.second;
+            if (layer.block >= 0 &&
+                !blockPoolCounts.emplace(layer.block, layer.candidates.size()).second &&
+                blockPoolCounts.at(layer.block) != layer.candidates.size())
+                throw std::runtime_error("inconsistent candidate counts within block");
         }
     }
     Json nonuniformRoot;
@@ -459,6 +491,7 @@ OnlineWorkloadController::run(const std::string &manifest,
 
     std::unordered_map<uint64_t, int> packetRun;
     std::unordered_map<int, int> phaseCandidate;
+    std::map<std::pair<int, int>, int> blockBindings;
     std::vector<int> resourceOwner(numResources, -1);
     std::vector<uint64_t> resourceRelease(numResources, 0);
     std::unordered_map<int, int> runRemaining;
@@ -475,8 +508,66 @@ OnlineWorkloadController::run(const std::string &manifest,
     double latencySum = 0.0;
     std::unordered_map<uint64_t, uint64_t> injectedAt;
 
+    auto bindGroup = [&](int input, int layerId) -> int {
+        const CatalogLayer &layer = catalogLayers.at(layerId);
+        if (!dynamicReuse || layer.block < 0)
+            return -1;
+        const auto key = std::make_pair(input, layer.block);
+        const auto existing = blockBindings.find(key);
+        if (existing != blockBindings.end())
+            return existing->second;
+        int selected = -1;
+        if (preferEncoding && std::all_of(layer.canonical.begin(), layer.canonical.end(),
+                [&](int resource) { return resourceOwner.at(resource) == -1; }))
+            selected = static_cast<int>(std::find(layer.candidates.begin(),
+                layer.candidates.end(), layer.canonical) - layer.candidates.begin());
+        std::pair<uint64_t, uint64_t> best;
+        int bestPool = 0;
+        for (size_t pool = 0; selected < 0 && pool < layer.candidates.size(); ++pool) {
+            const auto &bank = layer.candidates[pool];
+            uint64_t ready = tick, load = 0, queued = 0;
+            for (int resource : bank) {
+                const int owner = resourceOwner[resource];
+                if (owner >= 0)
+                    ready = std::max(ready, phases[phaseIndex.at(owner)].computeEnd);
+            }
+            for (const Phase &other : phases) {
+                const auto otherLayer = catalogLayers.find(other.layer);
+                if (other.status > 1 || otherLayer == catalogLayers.end() ||
+                    otherLayer->second.block < 0)
+                    continue;
+                const auto binding = blockBindings.find(
+                    std::make_pair(other.input, otherLayer->second.block));
+                if (binding == blockBindings.end() || binding->second != static_cast<int>(pool))
+                    continue;
+                queued += other.status == 1 ? other.computeEnd - tick :
+                    static_cast<uint64_t>(std::ceil(other.computeCycles * 1000.0 / frequency_ghz));
+                const auto &otherBank = otherLayer->second.candidates.at(pool);
+                if (other.status == 0 && other.remainingDeps == 0 && other.input <= input &&
+                    std::any_of(bank.begin(), bank.end(), [&](int resource) {
+                        return std::find(otherBank.begin(), otherBank.end(), resource) != otherBank.end();
+                    }))
+                    load += static_cast<uint64_t>(std::ceil(other.computeCycles * 1000.0 / frequency_ghz));
+            }
+            const auto score = std::make_pair(ready + load, queued);
+            if (pool == 0 || score < best) {
+                best = score;
+                // Keep scanning: ties retain the first pool, as in the Python scheduler.
+                bestPool = static_cast<int>(pool);
+            }
+        }
+        blockBindings.emplace(key, selected >= 0 ? selected : bestPool);
+        return blockBindings.at(key);
+    };
+
     auto routerFor = [&](int input, int phaseIndex, int endpoint) -> int {
-        (void)input;
+        if (!allowCrossGroup && !catalogLayers.empty()) {
+            const CatalogLayer &entry = catalogLayers.at(virtualLayer.at(endpoint));
+            const int pool = bindGroup(input, virtualLayer.at(endpoint));
+            const size_t offset = std::find(entry.virtualIds.begin(), entry.virtualIds.end(), endpoint)
+                - entry.virtualIds.begin();
+            endpoint = (pool < 0 ? entry.canonical : entry.candidates.at(pool)).at(offset);
+        } else {
         const int layer = phases[phaseIndex].layer;
         auto layerIt = catalogLayers.find(layer);
         if (layerIt != catalogLayers.end()) {
@@ -495,6 +586,7 @@ OnlineWorkloadController::run(const std::string &manifest,
             }
         } else if (virtualPhysical.count(endpoint)) {
             endpoint = virtualPhysical.at(endpoint);
+        }
         }
         auto it = endpoint_mode == "cnode" ? byCnode.find(endpoint) : byPhysical.find(endpoint);
         if (it == (endpoint_mode == "cnode" ? byCnode.end() : byPhysical.end()))
@@ -597,7 +689,12 @@ OnlineWorkloadController::run(const std::string &manifest,
             } else if (phase.status == 0 && phase.remainingDeps == 0) {
                 bool available = true;
                 const auto catalogIt = catalogLayers.find(phase.layer);
-                if (catalogIt != catalogLayers.end() && catalogIt->second.block >= 0) {
+                if (!allowCrossGroup && catalogIt != catalogLayers.end()) {
+                    const int pool = bindGroup(phase.input, phase.layer);
+                    phaseCandidate[static_cast<int>(i)] = pool;
+                    phase.resources = pool < 0 ? catalogIt->second.canonical :
+                        catalogIt->second.candidates.at(pool);
+                } else if (catalogIt != catalogLayers.end() && catalogIt->second.block >= 0) {
                     int selected = -1;
                     if (preferEncoding) {
                         const auto &layer = catalogIt->second;
@@ -673,6 +770,7 @@ OnlineWorkloadController::run(const std::string &manifest,
     for (const Run &record : runs)
         injected += record.packets;
     output << "{\"mode\":\"online\",\"backend\":\"omelet\"," 
+           << "\"auto_reuse_allow_cross_group\":" << (allowCrossGroup ? 1 : 0) << ','
            << "\"final_tick\":" << tick << ','
            << "\"final_cycle\":" << static_cast<uint64_t>(std::ceil(tick * frequency_ghz / 1000.0)) << ','
            << "\"cycle_frequency_ghz\":" << frequency_ghz << ','
