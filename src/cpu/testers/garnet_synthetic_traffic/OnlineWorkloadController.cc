@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <limits>
@@ -345,6 +346,10 @@ OnlineWorkloadController::run(const std::string &manifest,
     std::unordered_map<int, int> byCnode;
     std::unordered_map<int, int> virtualPhysical;
     std::unordered_map<int, CatalogLayer> catalogLayers;
+    const char *preference = std::getenv("OMELET_AUTO_REUSE_USE_ENCODING");
+    if (preference && std::strcmp(preference, "0") && std::strcmp(preference, "1"))
+        throw std::runtime_error("OMELET_AUTO_REUSE_USE_ENCODING must be 0 or 1");
+    bool preferEncoding = preference && std::strcmp(preference, "1") == 0;
     if (!catalog.empty()) {
         std::ifstream catalogStream(catalog);
         if (!catalogStream)
@@ -352,6 +357,7 @@ OnlineWorkloadController::run(const std::string &manifest,
         std::stringstream catalogBuffer;
         catalogBuffer << catalogStream.rdbuf();
         const Json catalogRoot = JsonParser(catalogBuffer.str()).parse();
+        preferEncoding = preferEncoding && intField(catalogRoot, "auto_reuse") == 1;
         for (const Json &tile : field(catalogRoot, "virtual_tiles").array)
             virtualPhysical.emplace(intField(tile, "virtual_id"), intField(tile, "physical_id"));
         for (const Json &item : field(catalogRoot, "layers").array) {
@@ -375,6 +381,10 @@ OnlineWorkloadController::run(const std::string &manifest,
             }
             if (layer.virtualIds.size() != layer.canonical.size())
                 throw std::runtime_error("catalog layer virtual/canonical size mismatch");
+            if (preferEncoding && layer.block >= 0 &&
+                std::find(layer.candidates.begin(), layer.candidates.end(),
+                          layer.canonical) == layer.candidates.end())
+                throw std::runtime_error("encoded reuse resources missing from catalog candidates");
             catalogLayers.emplace(intField(item, "layer_id"), std::move(layer));
         }
     }
@@ -589,7 +599,20 @@ OnlineWorkloadController::run(const std::string &manifest,
                 const auto catalogIt = catalogLayers.find(phase.layer);
                 if (catalogIt != catalogLayers.end() && catalogIt->second.block >= 0) {
                     int selected = -1;
-                    for (size_t candidate = 0; candidate < catalogIt->second.candidates.size(); ++candidate) {
+                    if (preferEncoding) {
+                        const auto &layer = catalogIt->second;
+                        bool canonicalAvailable = true;
+                        for (const int resource : layer.canonical) {
+                            if (resource < 0 || resource >= numResources ||
+                                resourceOwner[resource] != -1 || resourceRelease[resource] > tick)
+                                canonicalAvailable = false;
+                        }
+                        if (canonicalAvailable)
+                            selected = static_cast<int>(std::find(
+                                layer.candidates.begin(), layer.candidates.end(),
+                                layer.canonical) - layer.candidates.begin());
+                    }
+                    for (size_t candidate = 0; selected < 0 && candidate < catalogIt->second.candidates.size(); ++candidate) {
                         bool candidateAvailable = true;
                         for (const int resource : catalogIt->second.candidates[candidate]) {
                             if (resource < 0 || resource >= numResources ||
