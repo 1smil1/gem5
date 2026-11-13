@@ -177,18 +177,35 @@ std::string replaceExt(const std::string &path, const std::string &ext)
 struct TraceReader {
     // runOnlineWorkload is a Python-bound method retaining the GIL. Reuse
     // its interpreter's buffered bz2 reader instead of spawning per group.
+    // Read large chunks so each packet does not cross the Python boundary.
     pybind11::object stream = pybind11::none();
     std::string path;
+    std::string buffer;
+    size_t bufferOffset = 0;
     size_t read(void *buffer, size_t requested)
     {
-        std::string data;
-        try {
-            data = stream.attr("read")(requested).cast<std::string>();
-        } catch (const pybind11::error_already_set &error) {
-            throw std::runtime_error(path + ": BZ2 read failed: " + error.what());
+        char *out = static_cast<char *>(buffer);
+        size_t copied = 0;
+        while (copied < requested) {
+            if (bufferOffset == this->buffer.size()) {
+                std::string data;
+                try {
+                    data = stream.attr("read")(1 << 20).cast<std::string>();
+                } catch (const pybind11::error_already_set &error) {
+                    throw std::runtime_error(path + ": BZ2 read failed: " + error.what());
+                }
+                this->buffer = std::move(data);
+                bufferOffset = 0;
+                if (this->buffer.empty())
+                    break;
+            }
+            const size_t available = this->buffer.size() - bufferOffset;
+            const size_t count = std::min(requested - copied, available);
+            std::memcpy(out + copied, this->buffer.data() + bufferOffset, count);
+            bufferOffset += count;
+            copied += count;
         }
-        std::memcpy(buffer, data.data(), data.size());
-        return data.size();
+        return copied;
     }
     void skipBytes(uint64_t bytes, const std::string &path, const char *what)
     {
@@ -507,6 +524,10 @@ OnlineWorkloadController::run(const std::string &manifest,
     uint64_t arrived = 0;
     double latencySum = 0.0;
     std::unordered_map<uint64_t, uint64_t> injectedAt;
+    std::set<int> readyPhases;
+    std::set<int> runningPhases;
+    std::multiset<std::pair<uint64_t, int>> computeEvents;
+    size_t donePhaseCount = 0;
 
     auto bindGroup = [&](int input, int layerId) -> int {
         const CatalogLayer &layer = catalogLayers.at(layerId);
@@ -598,20 +619,27 @@ OnlineWorkloadController::run(const std::string &manifest,
 
     for (const Phase &phase : phases)
         ++inputRemaining[phase.input];
+    for (size_t i = 0; i < phases.size(); ++i) {
+        if (phases[i].remainingDeps == 0)
+            readyPhases.insert(static_cast<int>(i));
+    }
 
     auto markDone = [&](int index, uint64_t doneTick) {
         Phase &phase = phases[index];
         if (phase.status == 3)
             return;
         phase.status = 3;
+        ++donePhaseCount;
         phase.commEnd = std::max(doneTick, phase.computeEnd);
         for (const int resource : phase.resources) {
             if (resourceOwner[resource] == phase.id)
                 resourceOwner[resource] = -1;
             resourceRelease[resource] = std::max(resourceRelease[resource], phase.commEnd);
         }
-        for (const int dependent : dependents[index])
-            --phases[dependent].remainingDeps;
+        for (const int dependent : dependents[index]) {
+            if (--phases[dependent].remainingDeps == 0)
+                readyPhases.insert(dependent);
+        }
         if (--inputRemaining[phase.input] == 0 && inputDone[phase.input] == 0)
             inputDone[phase.input] = phase.commEnd;
     };
@@ -639,10 +667,20 @@ OnlineWorkloadController::run(const std::string &manifest,
             }
         }
 
-        for (size_t i = 0; i < phases.size(); ++i) {
+        for (auto runningIt = runningPhases.begin();
+             runningIt != runningPhases.end();) {
+            const int i = *runningIt;
             Phase &phase = phases[i];
-            if (phase.status != 1 || phase.computeEnd > tick)
+            if (phase.computeEnd > tick) {
+                ++runningIt;
                 continue;
+            }
+            runningIt = runningPhases.erase(runningIt);
+            const auto eventIt = computeEvents.find(
+                std::make_pair(phase.computeEnd, i));
+            if (eventIt == computeEvents.end())
+                throw std::runtime_error("running phase is missing its compute event");
+            computeEvents.erase(eventIt);
             for (const int resource : phase.resources) {
                 resourceRelease[resource] = std::max(resourceRelease[resource], phase.computeEnd);
             }
@@ -681,71 +719,81 @@ OnlineWorkloadController::run(const std::string &manifest,
             }
         }
 
-        uint64_t nextEvent = std::numeric_limits<uint64_t>::max();
-        for (size_t i = 0; i < phases.size(); ++i) {
+        uint64_t nextEvent = computeEvents.empty() ?
+            std::numeric_limits<uint64_t>::max() : computeEvents.begin()->first;
+        for (auto readyIt = readyPhases.begin();
+             readyIt != readyPhases.end();) {
+            const int i = *readyIt;
             Phase &phase = phases[i];
-            if (phase.status == 1) {
-                nextEvent = std::min(nextEvent, phase.computeEnd);
-            } else if (phase.status == 0 && phase.remainingDeps == 0) {
-                bool available = true;
-                const auto catalogIt = catalogLayers.find(phase.layer);
-                if (!allowCrossGroup && catalogIt != catalogLayers.end()) {
-                    const int pool = bindGroup(phase.input, phase.layer);
-                    phaseCandidate[static_cast<int>(i)] = pool;
-                    phase.resources = pool < 0 ? catalogIt->second.canonical :
-                        catalogIt->second.candidates.at(pool);
-                } else if (catalogIt != catalogLayers.end() && catalogIt->second.block >= 0) {
-                    int selected = -1;
-                    if (preferEncoding) {
-                        const auto &layer = catalogIt->second;
-                        bool canonicalAvailable = true;
-                        for (const int resource : layer.canonical) {
-                            if (resource < 0 || resource >= numResources ||
-                                resourceOwner[resource] != -1 || resourceRelease[resource] > tick)
-                                canonicalAvailable = false;
-                        }
-                        if (canonicalAvailable)
-                            selected = static_cast<int>(std::find(
-                                layer.candidates.begin(), layer.candidates.end(),
-                                layer.canonical) - layer.candidates.begin());
+            if (phase.status != 0 || phase.remainingDeps != 0) {
+                readyIt = readyPhases.erase(readyIt);
+                continue;
+            }
+            bool available = true;
+            const auto catalogIt = catalogLayers.find(phase.layer);
+            if (!allowCrossGroup && catalogIt != catalogLayers.end()) {
+                const int pool = bindGroup(phase.input, phase.layer);
+                phaseCandidate[i] = pool;
+                phase.resources = pool < 0 ? catalogIt->second.canonical :
+                    catalogIt->second.candidates.at(pool);
+            } else if (catalogIt != catalogLayers.end() && catalogIt->second.block >= 0) {
+                int selected = -1;
+                if (preferEncoding) {
+                    const auto &layer = catalogIt->second;
+                    bool canonicalAvailable = true;
+                    for (const int resource : layer.canonical) {
+                        if (resource < 0 || resource >= numResources ||
+                            resourceOwner[resource] != -1 || resourceRelease[resource] > tick)
+                            canonicalAvailable = false;
                     }
-                    for (size_t candidate = 0; selected < 0 && candidate < catalogIt->second.candidates.size(); ++candidate) {
-                        bool candidateAvailable = true;
-                        for (const int resource : catalogIt->second.candidates[candidate]) {
-                            if (resource < 0 || resource >= numResources ||
-                                resourceOwner[resource] != -1 || resourceRelease[resource] > tick)
-                                candidateAvailable = false;
-                        }
-                        if (candidateAvailable) {
-                            selected = static_cast<int>(candidate);
-                            break;
-                        }
+                    if (canonicalAvailable)
+                        selected = static_cast<int>(std::find(
+                            layer.candidates.begin(), layer.candidates.end(),
+                            layer.canonical) - layer.candidates.begin());
+                }
+                for (size_t candidate = 0;
+                     selected < 0 && candidate < catalogIt->second.candidates.size();
+                     ++candidate) {
+                    bool candidateAvailable = true;
+                    for (const int resource : catalogIt->second.candidates[candidate]) {
+                        if (resource < 0 || resource >= numResources ||
+                            resourceOwner[resource] != -1 ||
+                            resourceRelease[resource] > tick)
+                            candidateAvailable = false;
                     }
-                    if (selected < 0) {
-                        available = false;
-                    } else {
-                        phaseCandidate[static_cast<int>(i)] = selected;
-                        phase.resources = catalogIt->second.candidates[static_cast<size_t>(selected)];
+                    if (candidateAvailable) {
+                        selected = static_cast<int>(candidate);
+                        break;
                     }
                 }
-                for (const int resource : phase.resources)
-                    available &= resourceOwner[resource] == -1 && resourceRelease[resource] <= tick;
-                if (available) {
-                    phase.status = 1;
-                    phase.computeStart = tick;
-                    phase.computeEnd = tick + static_cast<uint64_t>(std::ceil(
-                        phase.computeCycles * 1000.0 / frequency_ghz));
-                    for (const int resource : phase.resources)
-                        resourceOwner[resource] = phase.id;
-                    nextEvent = std::min(nextEvent, phase.computeEnd);
+                if (selected < 0) {
+                    available = false;
+                } else {
+                    phaseCandidate[i] = selected;
+                    phase.resources = catalogIt->second.candidates[
+                        static_cast<size_t>(selected)];
                 }
             }
+            for (const int resource : phase.resources)
+                available &= resourceOwner[resource] == -1 &&
+                    resourceRelease[resource] <= tick;
+            if (!available) {
+                ++readyIt;
+                continue;
+            }
+            readyIt = readyPhases.erase(readyIt);
+            phase.status = 1;
+            phase.computeStart = tick;
+            phase.computeEnd = tick + static_cast<uint64_t>(std::ceil(
+                phase.computeCycles * 1000.0 / frequency_ghz));
+            for (const int resource : phase.resources)
+                resourceOwner[resource] = phase.id;
+            runningPhases.insert(i);
+            computeEvents.emplace(phase.computeEnd, i);
+            nextEvent = std::min(nextEvent, phase.computeEnd);
         }
 
-        bool allDone = true;
-        for (const Phase &phase : phases)
-            allDone &= phase.status == 3;
-        if (allDone && packetRun.empty())
+        if (donePhaseCount == phases.size() && packetRun.empty())
             break;
         if (nextEvent == std::numeric_limits<uint64_t>::max()) {
             if (packetRun.empty())
